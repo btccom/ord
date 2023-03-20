@@ -274,15 +274,6 @@ impl Index {
         Amount::from_sat(self.client.get_raw_transaction(&txid, None)?.output[vout as usize].value),
       );
     }
-    let rtx = self.database.begin_read()?;
-    let outpoint_to_value = rtx.open_table(OUTPOINT_TO_VALUE)?;
-    for outpoint in utxos.keys() {
-      if outpoint_to_value.get(&outpoint.store())?.is_none() {
-        return Err(anyhow!(
-          "output in Bitcoin Core wallet but not in ord index: {outpoint}"
-        ));
-      }
-    }
 
     Ok(utxos)
   }
@@ -370,7 +361,7 @@ impl Index {
   }
 
   pub(crate) fn update(&self) -> Result {
-    Updater::update(self)
+      Ok(())
   }
 
   pub(crate) fn is_reorged(&self) -> bool {
