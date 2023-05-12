@@ -19,12 +19,18 @@ use {
 };
 
 #[derive(Serialize)]
-struct Output {
-  commit: Txid,
-  inscription: InscriptionId,
+struct Reveal {
   reveal: Txid,
   fees: u64,
-  reveals: Vec<Txid>,
+  inscription: InscriptionId,
+}
+
+#[derive(Serialize)]
+struct Output {
+  commit: Txid,
+  reveals: Vec<Reveal>,
+  fees: u64,
+  commit_fee: u64,
 }
 
 #[derive(Debug, Parser)]
@@ -99,28 +105,35 @@ impl Inscribe {
       Amount::from_sat(unsigned_commit_tx.output[0].value),
     );
 
-    let mut fees =
-      Self::calculate_fee(&unsigned_commit_tx, &utxos) + Self::calculate_fee(&seg_tx, &utxos);
-    
-    for (_vout, reveal_tx) in reveal_txs.iter().enumerate() {
-      utxos.insert(
-        reveal_tx.input[0].previous_output,
-        Amount::from_sat(seg_tx.output[_vout + 1].value),
-      );
-      fees = fees + Self::calculate_fee(&reveal_tx, &utxos)
-    }
+    let mut reveals = Vec::<Reveal>::new();
+    let commit_fee = Self::calculate_fee(&unsigned_commit_tx, &utxos);
+    let seg_fee = Self::calculate_fee(&seg_tx, &utxos);
+    let mut fees = commit_fee + seg_fee;
 
     if self.dry_run {
-      let mut reveals = Vec::new();
-      for reveal_tx in reveal_txs.iter() {
-        reveals.push(reveal_tx.txid());
+      reveals.push(Reveal { 
+        reveal: seg_tx.txid(), 
+        inscription: seg_tx.txid().into(),
+        fees: seg_fee,
+      });
+      for (_vout, reveal_tx) in reveal_txs.iter().enumerate() {
+        utxos.insert(
+          reveal_tx.input[0].previous_output,
+          Amount::from_sat(seg_tx.output[_vout + 1].value),
+        );
+        let fee = Self::calculate_fee(&reveal_tx, &utxos);
+        fees = fees + fee;
+        reveals.push(Reveal {
+          reveal: reveal_tx.txid(),
+          inscription: reveal_tx.txid().into(),
+          fees: fee,
+        });
       }
       print_json(Output {
         commit: unsigned_commit_tx.txid(),
-        reveal: seg_tx.txid(),
-        inscription: seg_tx.txid().into(),
-        fees: fees,
         reveals: reveals,
+        fees: fees,
+        commit_fee: commit_fee,
       })?;
     } else {
       if !self.no_backup {
@@ -135,24 +148,38 @@ impl Inscribe {
         .send_raw_transaction(&signed_raw_commit_tx)
         .context("Failed to send commit transaction")?;
 
+      let mut reveals = Vec::<Reveal>::new();
       let seg = client
         .send_raw_transaction(&seg_tx)
         .context("Failed to send seg transaction")?;
+      reveals.push(Reveal {
+        reveal: seg,
+        inscription: seg.into(),
+        fees: seg_fee,
+      });
 
-      let mut reveals = Vec::new();
-      for reveal_tx in reveal_txs.iter() {
+      for (_vout, reveal_tx) in reveal_txs.iter().enumerate() {
+        utxos.insert(
+          reveal_tx.input[0].previous_output,
+          Amount::from_sat(seg_tx.output[_vout + 1].value),
+        );
+        let fee = Self::calculate_fee(&reveal_tx, &utxos);
+        fees = fees + fee;
         let reveal = client
           .send_raw_transaction(&*reveal_tx)
           .context("Failed to send reveal transaction")?;
-        reveals.push(reveal);
+        reveals.push(Reveal {
+          reveal: reveal,
+          inscription: reveal.into(),
+          fees: fee,
+        });
       }
 
       print_json(Output {
         commit: commit,
-        reveal: seg,
-        inscription: seg.into(),
         fees: fees,
         reveals: reveals,
+        commit_fee: commit_fee
       })?;
     };
 
