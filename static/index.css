@@ -1,15 +1,15 @@
 :root {
   --common: grey;
-  --dark-bg: #131516;
-  --dark-fg: #98a3ad;
+  --dark-bg: #f6f9fc;
+  --dark-fg: #000000;
   --epic: darkorchid;
   --legendary: gold;
   --light-bg: #000000;
   --light-fg: #ffffff;
-  --link: #4169e1;
+  --link: #1a7ee3;
   --mythic: #f2a900;
   --rare: cornflowerblue;
-  --search-bg: #b7b7b7;
+  --search-bg: #ffffff;
   --search-border: #aaaaaa;
   --search-fg: #000000;
   --uncommon: forestgreen;
@@ -230,3 +230,5 @@ a.mythic {
 .inscription > a > iframe {
   width: 100%;
 }
+
+
