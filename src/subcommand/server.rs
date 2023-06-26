@@ -157,6 +157,7 @@ impl Server {
         .route("/favicon.ico", get(Self::favicon))
         .route("/feed.xml", get(Self::feed))
         .route("/input/:block/:transaction/:input", get(Self::input))
+        .route("/number/:num", get(Self::number))
         .route("/inscription/:inscription_id", get(Self::inscription))
         .route("/inscriptions", get(Self::inscriptions))
         .route("/inscriptions/:from", get(Self::inscriptions_from))
@@ -857,6 +858,63 @@ impl Server {
       Media::Unknown => Ok(PreviewUnknownHtml.into_response()),
       Media::Video => Ok(PreviewVideoHtml { inscription_id }.into_response()),
     }
+  }
+
+  async fn number(
+    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(index): Extension<Arc<Index>>,
+    Path(num): Path<i64>,
+  ) -> ServerResult<PageHtml<InscriptionHtml>> {
+    let inscription_id = index
+      .get_inscription_id_by_inscription_number(num)?
+      .ok_or_not_found(|| format!("number {num}"))?;
+
+    let entry = index
+      .get_inscription_entry(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+    let inscription = index
+      .get_inscription_by_id(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+    let satpoint = index
+      .get_inscription_satpoint_by_id(inscription_id)?
+      .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
+
+    let output = if satpoint.outpoint == unbound_outpoint() {
+      None
+    } else {
+      Some(
+        index
+          .get_transaction(satpoint.outpoint.txid)?
+          .ok_or_not_found(|| format!("inscription {inscription_id} current transaction"))?
+          .output
+          .into_iter()
+          .nth(satpoint.outpoint.vout.try_into().unwrap())
+          .ok_or_not_found(|| format!("inscription {inscription_id} current transaction output"))?,
+      )
+    };
+    let previous = index.get_inscription_id_by_inscription_number(entry.number - 1)?;
+
+    let next = index.get_inscription_id_by_inscription_number(entry.number + 1)?;
+
+    Ok(
+      InscriptionHtml {
+        chain: page_config.chain,
+        genesis_fee: entry.fee,
+        genesis_height: entry.height,
+        inscription,
+        inscription_id,
+        next,
+        number: entry.number,
+        output,
+        previous,
+        sat: entry.sat,
+        satpoint,
+        timestamp: timestamp(entry.timestamp),
+      }
+      .page(page_config, index.has_sat_index()?),
+    )
   }
 
   async fn inscription(
@@ -2302,7 +2360,7 @@ mod tests {
     server.assert_response_csp(
       format!("/preview/{}", InscriptionId::from(txid)),
       StatusCode::OK,
-      "default-src 'self' 'unsafe-eval' 'unsafe-inline' data:",
+      "default-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:",
       "hello",
     );
   }
