@@ -773,6 +773,28 @@ impl Index {
     Ok((inscriptions, prev, next))
   }
 
+  pub(crate) fn get_max_and_min_inscription_num(
+    &self,
+  ) -> Result<(i64, i64)> {
+    let rtx = self.database.begin_read()?;
+
+    let inscription_number_to_inscription_id =
+      rtx.open_table(INSCRIPTION_NUMBER_TO_INSCRIPTION_ID)?;
+
+    let max = match inscription_number_to_inscription_id.iter()?.rev().next() {
+      Some((number, _id)) => number.value(),
+      None => return Ok(Default::default()),
+    };
+
+    let min = match inscription_number_to_inscription_id.iter()?.next() {
+      Some((number, _id)) => number.value(),
+      None => return Ok(Default::default()),
+    };
+
+    Ok((max, min))
+  }
+
+
   pub(crate) fn get_feed_inscriptions(&self, n: usize) -> Result<Vec<(i64, InscriptionId)>> {
     Ok(
       self

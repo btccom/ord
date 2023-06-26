@@ -157,6 +157,7 @@ impl Server {
         .route("/favicon.ico", get(Self::favicon))
         .route("/feed.xml", get(Self::feed))
         .route("/input/:block/:transaction/:input", get(Self::input))
+        .route("/numbers", get(Self::numbers))
         .route("/number/:num", get(Self::number))
         .route("/inscription/:inscription_id", get(Self::inscription))
         .route("/inscriptions", get(Self::inscriptions))
@@ -1011,6 +1012,16 @@ impl Server {
     }
 
     Redirect::to(&destination)
+  }
+
+  async fn numbers(
+    Extension(index): Extension<Arc<Index>>
+  ) -> ServerResult<Response>{
+    let resp = index.get_max_and_min_inscription_num()?;
+    let s = format!("{},{}", resp.0, resp.1);
+    Ok(
+      s.into_response(),
+    )
   }
 }
 
