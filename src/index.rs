@@ -857,12 +857,14 @@ impl Index {
       rtx.open_table(INSCRIPTION_NUMBER_TO_INSCRIPTION_ID)?;
 
     let max = match inscription_number_to_inscription_id.iter()?.rev().next() {
-      Some((number, _id)) => number.value(),
+      Some(Ok((number, _id))) => number.value(),
+      Some(Err(_)) => return Ok(Default::default()),
       None => return Ok(Default::default()),
     };
 
     let min = match inscription_number_to_inscription_id.iter()?.next() {
-      Some((number, _id)) => number.value(),
+      Some(Ok((number, _id))) => number.value(),
+      Some(Err(_)) => return Ok(Default::default()),
       None => return Ok(Default::default()),
     };
 
