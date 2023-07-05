@@ -25,4 +25,8 @@ body > * {
 
 body > pre {
   opacity: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: auto;
+  width: 15.625rem;
 }

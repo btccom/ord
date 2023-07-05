@@ -1,8 +1,6 @@
-%% if self.number >= 0 {
-<h1>Inscription {{ self.number }}</h1>
-%% } else {
-<h1>Inscription {{ self.number }} (unstable)</h1>
-%% }
+<div class=inscription-page>
+
+
 <div class=inscription>
 %% if let Some(previous) = self.previous {
 <a class=prev href=/inscription/{{previous}}>❮</a>
@@ -16,6 +14,12 @@
 <div>❯</div>
 %% }
 </div>
+<div style="margin-left: 10rem;">
+%% if self.number >= 0 {
+  <h1>Inscription {{ self.number }}</h1>
+  %% } else {
+  <h1>Inscription {{ self.number }} (unstable)</h1>
+  %% }
 <dl>
   <dt>id</dt>
   <dd class=monospace>{{ self.inscription_id }}</dd>
@@ -64,3 +68,5 @@
   <dt>offset</dt>
   <dd>{{ self.satpoint.offset }}</dd>
 </dl>
+</div>
+</div>
