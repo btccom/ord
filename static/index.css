@@ -232,9 +232,10 @@ a.mythic {
 .inscription {
   display: flex;
   justify-content: center;
-  height:fit-content;
-  margin-top:6.5rem;
-  transform: scale(1.5);
+  height: fit-content;
+  margin-top: 4.5rem;
+  transform: scale(1.3);
+  width: 25rem;
 }
 
 .inscription > *:nth-child(1), .inscription > *:nth-child(3) {

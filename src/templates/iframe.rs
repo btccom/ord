@@ -29,7 +29,7 @@ impl Display for Iframe {
 
     write!(
       f,
-      "<iframe sandbox=allow-scripts scrolling=no loading=lazy src=/preview/{} style=border-radius:0.3rem;overflow:hidden;transform:translateZ(10px);></iframe>",
+      "<iframe id=iframe1 sandbox=allow-scripts scrolling=no loading=lazy src=/preview/{} style=border-radius:0.3rem;overflow:hidden;transform:translateZ(10px);></iframe>",
       self.inscription_id
     )?;
 
