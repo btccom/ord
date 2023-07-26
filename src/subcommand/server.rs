@@ -174,6 +174,7 @@ impl Server {
         .route("/static/*path", get(Self::static_asset))
         .route("/status", get(Self::status))
         .route("/tx/:txid", get(Self::transaction))
+        .route("/tx_inscriptions/:txid", get(Self::transaction_inscriptions))
         .layer(Extension(index))
         .layer(Extension(page_config))
         .layer(Extension(Arc::new(config)))
@@ -539,6 +540,17 @@ impl Server {
     )
   }
 
+  async fn transaction_inscriptions(
+    Extension(index): Extension<Arc<Index>>,
+    Path(txid): Path<Txid>,
+  ) -> ServerResult<Response> {
+    let inscription = index.get_transaction_inscription(txid.into())?;
+    let s = serde_json::to_string(&inscription).unwrap_or_default();
+    Ok(
+      s.into_response()
+    )
+  }
+  
   async fn status(Extension(index): Extension<Arc<Index>>) -> (StatusCode, &'static str) {
     if index.is_reorged() {
       (

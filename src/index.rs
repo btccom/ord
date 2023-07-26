@@ -598,6 +598,17 @@ impl Index {
     }))
   }
 
+  pub(crate) fn get_transaction_inscription(
+    &self,
+    txid: Txid,
+  ) -> Result<Vec<inscription::TransactionInscription>> {
+    let transaction = self.get_transaction(txid)?;
+    match transaction {
+      Some(tx) => Ok(Inscription::from_transaction(&tx)),
+      None => Err(anyhow!("get txid:{txid} fail"))
+    }
+  }
+
   pub(crate) fn get_inscriptions_on_output(
     &self,
     outpoint: OutPoint,

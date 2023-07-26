@@ -27,13 +27,13 @@ pub(crate) enum Curse {
   Reinscription,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub(crate) struct Inscription {
   body: Option<Vec<u8>>,
   content_type: Option<Vec<u8>>,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize)]
 pub(crate) struct TransactionInscription {
   pub(crate) inscription: Inscription,
   pub(crate) tx_in_index: u32,
