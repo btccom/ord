@@ -3,15 +3,16 @@ use {
   crate::wallet::Wallet,
   bitcoin::{
     blockdata::{opcodes, script},
+    key::PrivateKey,
+    key::{TapTweak, TweakedKeyPair, TweakedPublicKey, UntweakedKeyPair},
+    locktime::absolute::LockTime,
     policy::MAX_STANDARD_TX_WEIGHT,
-    schnorr::{TapTweak, TweakedKeyPair, TweakedPublicKey, UntweakedKeyPair},
     secp256k1::{
       self, constants::SCHNORR_SIGNATURE_SIZE, rand, schnorr::Signature, Secp256k1, XOnlyPublicKey,
     },
-    util::key::PrivateKey,
-    util::sighash::{Prevouts, SighashCache},
-    util::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder},
-    PackedLockTime, SchnorrSighashType, Witness,
+    sighash::{Prevouts, SighashCache, TapSighashType},
+    taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder},
+    ScriptBuf, Witness,
   },
   bitcoincore_rpc::bitcoincore_rpc_json::{ImportDescriptors, Timestamp},
   bitcoincore_rpc::Client,
@@ -37,11 +38,7 @@ struct Output {
 pub(crate) struct Inscribe {
   #[clap(long, help = "Inscribe <SATPOINT>")]
   pub(crate) satpoint: Option<SatPoint>,
-  #[clap(
-    long,
-    default_value = "1.0",
-    help = "Use fee rate of <FEE_RATE> sats/vB"
-  )]
+  #[clap(long, help = "Use fee rate of <FEE_RATE> sats/vB")]
   pub(crate) fee_rate: FeeRate,
   #[clap(
     long,
@@ -60,7 +57,7 @@ pub(crate) struct Inscribe {
   #[clap(long, help = "Don't sign or broadcast transactions.")]
   pub(crate) dry_run: bool,
   #[clap(long, help = "Send inscription to <DESTINATION>.")]
-  pub(crate) destination: Option<Address>,
+  pub(crate) destination: Option<Address<NetworkUnchecked>>,
   #[clap(long, help = "Reveal times, default 1.")]
   pub(crate) times: u64,
   #[clap(long, help= "Sats in inscription, default 666")]
@@ -69,23 +66,26 @@ pub(crate) struct Inscribe {
 
 impl Inscribe {
   pub(crate) fn run(self, options: Options) -> Result {
-    let client = options.bitcoin_rpc_client_for_wallet_command(false)?;
-
     let inscription = Inscription::from_file(options.chain(), &self.file)?;
 
     let index = Index::open(&options)?;
     index.update()?;
 
+    let client = options.bitcoin_rpc_client_for_wallet_command(false)?;
+
     let mut utxos = index.get_unspent_outputs(Wallet::load(&options)?)?;
 
     let inscriptions = index.get_inscriptions(None)?;
 
-    let commit_tx_change = [get_change_address(&client)?, get_change_address(&client)?];
+    let commit_tx_change = [
+      get_change_address(&client, &options)?,
+      get_change_address(&client, &options)?,
+    ];
 
-    let reveal_tx_destination = self
-      .destination
-      .map(Ok)
-      .unwrap_or_else(|| get_change_address(&client))?;
+    let reveal_tx_destination = match self.destination {
+      Some(address) => address.require_network(options.chain().network())?,
+      None => get_change_address(&client, &options)?,
+    };
 
     let (unsigned_commit_tx, seg_tx, reveal_txs, recovery_key_pair) =
       Inscribe::create_inscription_transactions(
@@ -248,8 +248,8 @@ impl Inscribe {
     let (public_key, _parity) = XOnlyPublicKey::from_keypair(&key_pair);
 
     let reveal_script = inscription.append_reveal_script(
-      script::Builder::new()
-        .push_slice(&public_key.serialize())
+      ScriptBuf::builder()
+        .push_slice(public_key.serialize())
         .push_opcode(opcodes::all::OP_CHECKSIG),
     );
 
@@ -334,12 +334,12 @@ impl Inscribe {
         0,
         &Prevouts::All(&[output]),
         TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
-        SchnorrSighashType::Default,
+        TapSighashType::Default,
       )
       .expect("signature hash should compute");
 
     let signature = secp256k1.sign_schnorr(
-      &secp256k1::Message::from_slice(signature_hash.as_inner())
+      &secp256k1::Message::from_slice(signature_hash.as_ref())
         .expect("should be cryptographically secure hash"),
       &key_pair,
     );
@@ -364,7 +364,7 @@ impl Inscribe {
 
     let reveal_weight = seg_tx.weight();
 
-    if !no_limit && reveal_weight > MAX_STANDARD_TX_WEIGHT.try_into().unwrap() {
+    if !no_limit && reveal_weight > bitcoin::Weight::from_wu(MAX_STANDARD_TX_WEIGHT.into()) {
       bail!(
         "reveal transaction weight greater than {MAX_STANDARD_TX_WEIGHT} (MAX_STANDARD_TX_WEIGHT): {reveal_weight}"
       );
@@ -395,12 +395,12 @@ impl Inscribe {
             0,
             &Prevouts::All(&[output]),
             TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
-            SchnorrSighashType::Default,
+            TapSighashType::Default,
           )
           .expect("signature hash should compute");
 
         let signature = secp256k1.sign_schnorr(
-          &secp256k1::Message::from_slice(signature_hash.as_inner())
+          &secp256k1::Message::from_slice(signature_hash.as_ref())
             .expect("should be cryptographically secure hash"),
           &key_pair,
         );
@@ -461,7 +461,7 @@ impl Inscribe {
         sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
       }],
       output: output,
-      lock_time: PackedLockTime::ZERO,
+      lock_time: LockTime::ZERO,
       version: 1,
     };
 

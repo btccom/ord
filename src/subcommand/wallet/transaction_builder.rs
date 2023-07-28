@@ -35,8 +35,8 @@
 use {
   super::*,
   bitcoin::{
-    blockdata::{locktime::PackedLockTime, witness::Witness},
-    util::amount::Amount,
+    blockdata::{locktime::absolute::LockTime, witness::Witness},
+    Amount, ScriptBuf,
   },
   std::collections::{BTreeMap, BTreeSet},
 };
@@ -50,6 +50,7 @@ pub enum Error {
   },
   NotEnoughCardinalUtxos,
   NotInWallet(SatPoint),
+  OutOfRange(SatPoint, u64),
   UtxoContainsAdditionalInscription {
     outgoing_satpoint: SatPoint,
     inscribed_satpoint: SatPoint,
@@ -72,6 +73,7 @@ impl fmt::Display for Error {
         dust_value,
       } => write!(f, "output value is below dust value: {output_value} < {dust_value}"),
       Error::NotInWallet(outgoing_satpoint) => write!(f, "outgoing satpoint {outgoing_satpoint} not in wallet"),
+      Error::OutOfRange(outgoing_satpoint, maximum) => write!(f, "outgoing satpoint {outgoing_satpoint} offset higher than maximum {maximum}"),
       Error::NotEnoughCardinalUtxos => write!(
         f,
         "wallet does not contain enough cardinal UTXOs, please add additional funds to wallet."
@@ -227,6 +229,10 @@ impl TransactionBuilder {
       .get(&self.outgoing.outpoint)
       .ok_or(Error::NotInWallet(self.outgoing))?;
 
+    if self.outgoing.offset >= amount.to_sat() {
+      return Err(Error::OutOfRange(self.outgoing, amount.to_sat() - 1));
+    }
+
     self.utxos.remove(&self.outgoing.outpoint);
     self.inputs.push(self.outgoing.outpoint);
     self.outputs.push((self.recipient.clone(), amount));
@@ -273,7 +279,12 @@ impl TransactionBuilder {
     if self.outputs[0].0 == self.recipient {
       tprintln!("no alignment output");
     } else {
-      let dust_limit = self.recipient.script_pubkey().dust_value();
+      let dust_limit = self
+        .unused_change_addresses
+        .last()
+        .unwrap()
+        .script_pubkey()
+        .dust_value();
       if self.outputs[0].1 >= dust_limit {
         tprintln!("no padding needed");
       } else {
@@ -419,14 +430,13 @@ impl TransactionBuilder {
   fn estimate_vbytes_with(inputs: usize, outputs: Vec<Address>) -> usize {
     Transaction {
       version: 1,
-      lock_time: PackedLockTime::ZERO,
+      lock_time: LockTime::ZERO,
       input: (0..inputs)
-        .into_iter()
         .map(|_| TxIn {
           previous_output: OutPoint::null(),
-          script_sig: Script::new(),
+          script_sig: ScriptBuf::new(),
           sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-          witness: Witness::from_vec(vec![vec![0; TransactionBuilder::SCHNORR_SIGNATURE_SIZE]]),
+          witness: Witness::from_slice(&[&[0; TransactionBuilder::SCHNORR_SIGNATURE_SIZE]]),
         })
         .collect(),
       output: outputs
@@ -448,13 +458,13 @@ impl TransactionBuilder {
     let recipient = self.recipient.script_pubkey();
     let transaction = Transaction {
       version: 1,
-      lock_time: PackedLockTime::ZERO,
+      lock_time: LockTime::ZERO,
       input: self
         .inputs
         .iter()
         .map(|outpoint| TxIn {
           previous_output: *outpoint,
-          script_sig: Script::new(),
+          script_sig: ScriptBuf::new(),
           sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
           witness: Witness::new(),
         })
@@ -594,7 +604,7 @@ impl TransactionBuilder {
 
     let mut modified_tx = transaction.clone();
     for input in &mut modified_tx.input {
-      input.witness = Witness::from_vec(vec![vec![0; 64]]);
+      input.witness = Witness::from_slice(&[&[0; 64]]);
     }
     let expected_fee = self.fee_rate.fee(modified_tx.vsize());
 
@@ -725,7 +735,7 @@ mod tests {
       tx_builder.build(),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1)), tx_in(outpoint(2)), tx_in(outpoint(3))],
         output: vec![
           tx_out(5_000, recipient()),
@@ -767,7 +777,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(4901, recipient())],
       })
@@ -814,7 +824,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1)), tx_in(outpoint(2))],
         output: vec![tx_out(4_950, change(1)), tx_out(4_862, recipient())],
       })
@@ -876,7 +886,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1)), tx_in(outpoint(2))],
         output: vec![
           tx_out(4_950, change(1)),
@@ -963,8 +973,9 @@ mod tests {
     .unwrap();
 
     builder.outputs[0].0 = "tb1qx4gf3ya0cxfcwydpq8vr2lhrysneuj5d7lqatw"
-      .parse()
-      .unwrap();
+      .parse::<Address<NetworkUnchecked>>()
+      .unwrap()
+      .assume_checked();
 
     builder.build().unwrap();
   }
@@ -1007,7 +1018,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![
           tx_out(TransactionBuilder::TARGET_POSTAGE.to_sat(), recipient()),
@@ -1053,7 +1064,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(3_333, change(1)), tx_out(6_537, recipient())],
       })
@@ -1078,7 +1089,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(2)), tx_in(outpoint(1))],
         output: vec![tx_out(10_001, change(1)), tx_out(9_811, recipient())],
       })
@@ -1306,7 +1317,7 @@ mod tests {
       transaction,
       Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(10_000 - fee.to_sat(), recipient())],
       }
@@ -1329,7 +1340,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(1000, recipient()), tx_out(3870, change(1))],
       })
@@ -1355,7 +1366,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1)), tx_in(outpoint(2))],
         output: vec![tx_out(1500, recipient()), tx_out(312, change(1))],
       })
@@ -1439,8 +1450,9 @@ mod tests {
       0,
       vec![
         "bc1pxwww0ct9ue7e8tdnlmug5m2tamfn7q06sahstg39ys4c9f3340qqxrdu9k"
-          .parse()
-          .unwrap(),
+          .parse::<Address<NetworkUnchecked>>()
+          .unwrap()
+          .assume_checked(),
       ],
     );
     assert_eq!(after - before, TransactionBuilder::ADDITIONAL_OUTPUT_VBYTES);
@@ -1462,7 +1474,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(901, recipient())],
       }),
@@ -1484,7 +1496,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(20_000, recipient())],
       }),
@@ -1507,7 +1519,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(1005, recipient())],
       }),
@@ -1584,7 +1596,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(1802, recipient())],
       }),
@@ -1606,7 +1618,7 @@ mod tests {
       ),
       Ok(Transaction {
         version: 1,
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         input: vec![tx_in(outpoint(1))],
         output: vec![tx_out(20250, recipient())],
       }),
