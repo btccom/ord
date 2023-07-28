@@ -63,6 +63,8 @@ pub(crate) struct Inscribe {
   pub(crate) destination: Option<Address>,
   #[clap(long, help = "Reveal times, default 1.")]
   pub(crate) times: u64,
+  #[clap(long, help= "Sats in inscription, default 666")]
+  pub(crate) amount: Amount,
 }
 
 impl Inscribe {
@@ -98,6 +100,7 @@ impl Inscribe {
         self.fee_rate,
         self.no_limit,
         self.times,
+        self.amount,
       )?;
 
     utxos.insert(
@@ -207,6 +210,7 @@ impl Inscribe {
     reveal_fee_rate: FeeRate,
     no_limit: bool,
     times: u64,
+    amount: Amount,
   ) -> Result<(Transaction, Transaction, Vec<Transaction>, TweakedKeyPair)> {
     let satpoint = if let Some(satpoint) = satpoint {
       satpoint
@@ -276,14 +280,14 @@ impl Inscribe {
     outputs.push({
       TxOut {
         script_pubkey: destination.script_pubkey(),
-        value: TransactionBuilder::TARGET_POSTAGE.to_sat(),
+        value: amount.to_sat(),
       }
     });
     for _ in 1..times {
       outputs.push({
         TxOut {
           script_pubkey: commit_tx_address.script_pubkey(),
-          value: TransactionBuilder::TARGET_POSTAGE.to_sat() + reveal_fee.to_sat(),
+          value: amount.to_sat() + reveal_fee.to_sat(),
         }
       });
     }
@@ -302,7 +306,7 @@ impl Inscribe {
       commit_tx_address.clone(),
       change,
       commit_fee_rate,
-      reveal_fee * (times - 1) + seg_fee + TransactionBuilder::TARGET_POSTAGE * times,
+      reveal_fee * (times - 1) + seg_fee + amount * times,
     )?;
 
     let (vout, output) = unsigned_commit_tx
@@ -379,7 +383,7 @@ impl Inscribe {
           },
           vec![TxOut {
             script_pubkey: destination.script_pubkey(),
-            value: TransactionBuilder::TARGET_POSTAGE.to_sat(),
+            value: amount.to_sat(),
           }],
           &reveal_script,
         );
