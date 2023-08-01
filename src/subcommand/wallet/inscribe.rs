@@ -61,7 +61,7 @@ pub(crate) struct Inscribe {
   #[clap(long, help = "Reveal times, default 1.")]
   pub(crate) times: u64,
   #[clap(long, help= "Sats in inscription, default 666")]
-  pub(crate) amount: Amount,
+  pub(crate) amount: u64,
 }
 
 impl Inscribe {
@@ -210,8 +210,9 @@ impl Inscribe {
     reveal_fee_rate: FeeRate,
     no_limit: bool,
     times: u64,
-    amount: Amount,
+    value: u64,
   ) -> Result<(Transaction, Transaction, Vec<Transaction>, TweakedKeyPair)> {
+    let amount = Amount::from_sat(value);
     let satpoint = if let Some(satpoint) = satpoint {
       satpoint
     } else {

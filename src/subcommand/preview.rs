@@ -88,7 +88,7 @@ impl Preview {
             no_limit: false,
             destination: None,
             times: 1,
-            amount: Amount::from_sat(666),
+            amount: 666,
           },
         )),
       }
