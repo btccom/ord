@@ -270,3 +270,21 @@ a.mythic {
   width: 42rem;
 }
 
+@media screen and (max-width: 768px) {
+  .inscription > a:nth-child(1), .inscription > a:nth-child(3) {
+    color: var(--dark-fg);
+  }
+  .inscription-page {
+    width: 100%;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  .inscription {
+    transform: scale(1);
+    width: 100%;
+  }
+  .inscription-right {
+    width: 100%;
+  }
+}
