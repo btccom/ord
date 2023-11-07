@@ -18,16 +18,17 @@ use {
     decimal::Decimal,
     degree::Degree,
     deserialize_from_str::DeserializeFromStr,
+    envelope::ParsedEnvelope,
     epoch::Epoch,
     height::Height,
-    index::{Index, List},
-    inscription::Inscription,
+    index::{Index, List, RuneEntry},
     inscription_id::InscriptionId,
     media::Media,
     options::Options,
     outgoing::Outgoing,
     representation::Representation,
-    subcommand::Subcommand,
+    runes::{Pile, Rune, RuneId},
+    subcommand::{Subcommand, SubcommandResult},
     tally::Tally,
   },
   anyhow::{anyhow, bail, Context, Error},
@@ -38,11 +39,14 @@ use {
     consensus::{self, Decodable, Encodable},
     hash_types::BlockHash,
     hashes::Hash,
+    opcodes,
+    script::{self, Instruction},
     Amount, Block, Network, OutPoint, Script, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid,
   },
   bitcoincore_rpc::{Client, RpcApi},
   chain::Chain,
   chrono::{DateTime, TimeZone, Utc},
+  ciborium::Value,
   clap::{ArgGroup, Parser},
   derive_more::{Display, FromStr},
   html_escaper::{Escape, Trusted},
@@ -51,12 +55,12 @@ use {
   serde::{Deserialize, Deserializer, Serialize, Serializer},
   std::{
     cmp,
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     env,
     ffi::OsString,
     fmt::{self, Display, Formatter},
     fs::{self, File},
-    io,
+    io::{self, Cursor},
     net::{TcpListener, ToSocketAddrs},
     ops::{Add, AddAssign, Sub},
     path::{Path, PathBuf},
@@ -75,8 +79,13 @@ use {
 };
 
 pub use crate::{
-  fee_rate::FeeRate, object::Object, rarity::Rarity, sat::Sat, sat_point::SatPoint,
-  subcommand::wallet::transaction_builder::TransactionBuilder,
+  fee_rate::FeeRate,
+  inscription::Inscription,
+  object::Object,
+  rarity::Rarity,
+  sat::Sat,
+  sat_point::SatPoint,
+  subcommand::wallet::transaction_builder::{Target, TransactionBuilder},
 };
 
 #[cfg(test)]
@@ -103,24 +112,27 @@ mod config;
 mod decimal;
 mod degree;
 mod deserialize_from_str;
+mod envelope;
 mod epoch;
 mod fee_rate;
 mod height;
 mod index;
 mod inscription;
-mod inscription_id;
+pub mod inscription_id;
 mod media;
 mod object;
 mod options;
 mod outgoing;
 mod page_config;
-mod rarity;
+pub mod rarity;
 mod representation;
-mod sat;
+pub mod runes;
+pub mod sat;
 mod sat_point;
 pub mod subcommand;
 mod tally;
-mod templates;
+mod teleburn;
+pub mod templates;
 mod wallet;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
@@ -180,22 +192,25 @@ pub fn main() {
   })
   .expect("Error setting <CTRL-C> handler");
 
-  if let Err(err) = Arguments::parse().run() {
-    eprintln!("error: {err}");
-    err
-      .chain()
-      .skip(1)
-      .for_each(|cause| eprintln!("because: {cause}"));
-    if env::var_os("RUST_BACKTRACE")
-      .map(|val| val == "1")
-      .unwrap_or_default()
-    {
-      eprintln!("{}", err.backtrace());
+  match Arguments::parse().run() {
+    Err(err) => {
+      eprintln!("error: {err}");
+      err
+        .chain()
+        .skip(1)
+        .for_each(|cause| eprintln!("because: {cause}"));
+      if env::var_os("RUST_BACKTRACE")
+        .map(|val| val == "1")
+        .unwrap_or_default()
+      {
+        eprintln!("{}", err.backtrace());
+      }
+
+      gracefully_shutdown_indexer();
+
+      process::exit(1);
     }
-
-    gracefully_shutdown_indexer();
-
-    process::exit(1);
+    Ok(output) => output.print_json(),
   }
 
   gracefully_shutdown_indexer();

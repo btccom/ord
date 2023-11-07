@@ -1,4 +1,20 @@
-use {super::*, crate::command_builder::ToArgs};
+use {super::*, crate::command_builder::ToArgs, ord::subcommand::Empty};
+
+#[test]
+fn run_is_an_alias_for_update() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  rpc_server.mine_blocks(1);
+
+  let tempdir = TempDir::new().unwrap();
+
+  let index_path = tempdir.path().join("foo.redb");
+
+  CommandBuilder::new(format!("--index {} index run", index_path.display()))
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Empty>();
+
+  assert!(index_path.is_file())
+}
 
 #[test]
 fn custom_index_path() {
@@ -9,9 +25,9 @@ fn custom_index_path() {
 
   let index_path = tempdir.path().join("foo.redb");
 
-  CommandBuilder::new(format!("--index {} index run", index_path.display()))
+  CommandBuilder::new(format!("--index {} index update", index_path.display()))
     .rpc_server(&rpc_server)
-    .run_and_extract_stdout();
+    .run_and_deserialize_output::<Empty>();
 
   assert!(index_path.is_file())
 }
@@ -25,15 +41,15 @@ fn re_opening_database_does_not_trigger_schema_check() {
 
   let index_path = tempdir.path().join("foo.redb");
 
-  CommandBuilder::new(format!("--index {} index run", index_path.display()))
+  CommandBuilder::new(format!("--index {} index update", index_path.display()))
     .rpc_server(&rpc_server)
-    .run_and_extract_stdout();
+    .run_and_deserialize_output::<Empty>();
 
   assert!(index_path.is_file());
 
-  CommandBuilder::new(format!("--index {} index run", index_path.display()))
+  CommandBuilder::new(format!("--index {} index update", index_path.display()))
     .rpc_server(&rpc_server)
-    .run_and_extract_stdout();
+    .run_and_deserialize_output::<Empty>();
 }
 
 #[test]
@@ -46,7 +62,7 @@ fn index_runs_with_rpc_user_and_pass_as_env_vars() {
   let ord = Command::new(executable_path("ord"))
     .args(
       format!(
-        "--rpc-url {} --bitcoin-data-dir {} --data-dir {} index run",
+        "--rpc-url {} --bitcoin-data-dir {} --data-dir {} index update",
         rpc_server.url(),
         tempdir.path().display(),
         tempdir.path().display()
@@ -73,13 +89,14 @@ fn export_inscription_number_to_id_tsv() {
 
   inscribe(&rpc_server);
   inscribe(&rpc_server);
-  let Inscribe { inscription, .. } = inscribe(&rpc_server);
+  let (inscription, _) = inscribe(&rpc_server);
 
   rpc_server.mine_blocks(1);
 
   let tsv = CommandBuilder::new("index export --tsv foo.tsv")
     .rpc_server(&rpc_server)
     .temp_dir(temp_dir)
+    .stdout_regex(r"\{\}\n")
     .run_and_extract_file("foo.tsv");
 
   let entries: std::collections::BTreeMap<i64, ord::Object> = tsv
@@ -96,6 +113,6 @@ fn export_inscription_number_to_id_tsv() {
 
   assert_eq!(
     entries.get(&2).unwrap(),
-    &ord::Object::from_str(&inscription).unwrap()
-  )
+    &ord::Object::InscriptionId(inscription),
+  );
 }

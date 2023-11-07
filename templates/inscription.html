@@ -15,14 +15,24 @@
 %% }
 </div>
 <div class=inscription-right>
-%% if self.number >= 0 {
-  <h1>Inscription {{ self.number }}</h1>
+%% if self.inscription_number >= 0 {
+  <h1>Inscription {{ self.inscription_number }}</h1>
   %% } else {
-  <h1>Inscription {{ self.number }} (unstable)</h1>
+  <h1>Inscription {{ self.inscription_number }} (unstable)</h1>
   %% }
 <dl>
   <dt>id</dt>
   <dd class=monospace>{{ self.inscription_id }}</dd>
+%% if let Some(metadata) = self.inscription.metadata() {
+  <dt>metadata</dt>
+  <dd>
+    {{ Trusted(MetadataHtml(&metadata)) }}
+  </dd>
+%% }
+%% if let Some(parent) = &self.parent {
+  <dt>parent</dt>
+  <dd><a class=monospace href=/inscription/{{ parent }}>{{ parent }}</a></dd>
+%% }
 %% if let Some(output) = &self.output {
 %% if let Ok(address) = self.chain.address_from_script(&output.script_pubkey ) {
   <dt>address</dt>
@@ -34,6 +44,10 @@
 %% if let Some(sat) = self.sat {
   <dt>sat</dt>
   <dd><a href=/sat/{{sat}}>{{sat}}</a></dd>
+%% }
+%% if let Some(metaprotocol) = self.inscription.metaprotocol() {
+  <dt>metaprotocol</dt>
+  <dd>{{ metaprotocol }}</dd>
 %% }
 %% if let Some(content_length) = self.inscription.content_length() {
   <dt>preview</dt>
@@ -56,17 +70,23 @@
   <dt>genesis transaction</dt>
   <dd><a class=monospace href=/tx/{{ self.inscription_id.txid }}>{{ self.inscription_id.txid }}</a></dd>
   <dt>location</dt>
-%% if self.satpoint.outpoint == unbound_outpoint() {
-  <dd class=monospace>{{ self.satpoint }} (unbound)</dd>
-  <dt>output</dt>
-  <dd><a class=monospace href=/output/{{ self.satpoint.outpoint }}>{{ self.satpoint.outpoint }} (unbound)</a></dd>
-%% } else {
   <dd class=monospace>{{ self.satpoint }}</dd>
   <dt>output</dt>
   <dd><a class=monospace href=/output/{{ self.satpoint.outpoint }}>{{ self.satpoint.outpoint }}</a></dd>
-%% }
   <dt>offset</dt>
   <dd>{{ self.satpoint.offset }}</dd>
+  <dt>ethereum teleburn address</dt>
+  <dd>{{ teleburn::Ethereum::from(self.inscription_id) }}</dd>
+%% if !self.children.is_empty() {
+  <dt>children</dt>
+  <dd>
+    <div class=thumbnails>
+%% for id in &self.children {
+      {{Iframe::thumbnail(*id)}}
+%% }
+    </div>
+  </dd>
+%% }
 </dl>
 </div>
 </div>
