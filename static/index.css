@@ -133,7 +133,7 @@ ol, ul {
 }
 
 .block {
-  background-color: var(--light-bg);
+  background-color: var(--light-fg);
   border-radius: 0.5%;
   margin: 3%;
   padding: 0.5%;
@@ -141,8 +141,10 @@ ol, ul {
 }
 
 .block a {
-  color: var(--light-fg);
+  color: var(--dark-fg);
   margin-top: 1%;
+  font-weight: 500;
+  font-size: 20px;
 }
 
 .block h2 {
