@@ -1191,7 +1191,7 @@ impl Server {
   }
 
   async fn number(
-    Extension(page_config): Extension<Arc<PageConfig>>,
+    Extension(server_config): Extension<Arc<ServerConfig>>,
     Extension(index): Extension<Arc<Index>>,
     Path(num): Path<i32>,
     accept_json: AcceptJson,
@@ -1200,7 +1200,7 @@ impl Server {
       .get_inscription_id_by_inscription_number(num)?
       .ok_or_not_found(|| format!("number {num}"))?;
 
-      let entry = index
+    let entry = index
       .get_inscription_entry(inscription_id)?
       .ok_or_not_found(|| format!("inscription {inscription_id}"))?;
 
@@ -1262,7 +1262,12 @@ impl Server {
         output_value: output.as_ref().map(|o| o.value),
         address: output
           .as_ref()
-          .and_then(|o| page_config.chain.address_from_script(&o.script_pubkey).ok())
+          .and_then(|o| {
+            server_config
+              .chain
+              .address_from_script(&o.script_pubkey)
+              .ok()
+          })
           .map(|address| address.to_string()),
         sat: entry.sat,
         satpoint,
@@ -1276,7 +1281,7 @@ impl Server {
       .into_response()
     } else {
       InscriptionHtml {
-        chain: page_config.chain,
+        chain: server_config.chain,
         charms,
         children,
         genesis_fee: entry.fee,
@@ -1293,7 +1298,7 @@ impl Server {
         satpoint,
         timestamp: timestamp(entry.timestamp),
       }
-      .page(page_config)
+      .page(server_config)
       .into_response()
     })
   }
