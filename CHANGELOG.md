@@ -1,6 +1,92 @@
 Changelog
 =========
 
+[0.13.1](https://github.com/ordinals/ord/releases/tag/0.13.1) - 2023-12-16
+--------------------------------------------------------------------------
+
+### Fixed
+- Use pre-segwit transaction serialization for fundrawtransaction (#2865)
+
+[0.13.0](https://github.com/ordinals/ord/releases/tag/0.13.0) - 2023-12-15
+--------------------------------------------------------------------------
+
+### Added
+- Send runes with `ord wallet send` (#2858)
+- Add rune spacers (#2862)
+- Reserve runes for sequential allocation (#2831)
+- Unlock runes over course of halving epoch (#2852)
+- Add flag to decompress brotli server-side (#2854)
+- Add /status page (#2819)
+- Add coin charm (#2821)
+
+### Fixed
+- Fix endpoint `/inscriptions/block/<height>/<page>` (#2798)
+
+### Misc
+- Tweak rune tags and flags (#2860)
+- Unlock runes in first block of interval (#2861)
+- Index runes on testnet and signet deployments (#2857)
+- Fix fuzzers (#2859)
+- Make varint decoding infallible (#2853)
+- Add runes to parse command (#2830)
+- Update dependencies (#2828)
+- Add coverage recipe (#2846)
+- Put `Accept-Encoding` value in backticks (#2840)
+- Don't print status when deploying (#2838)
+- Fix justfile (#2836)
+- Allow deploying remotes other than ordinals/ord (#2829)
+- Include `Accept-Encoding` header value in error message (#2835)
+- Clarify docs (#2827)
+- Fix batch docs (#2823)
+- Add accept encoding test without qvalues (#2822)
+- Italian version of the handbook (#2801)
+- Preview can mine blocks (#2809)
+- Burn input runes if there are no non-op-return outputs (#2812)
+- Update audit-cache binary (#2804)
+
+[0.12.3](https://github.com/ordinals/ord/releases/tag/0.12.3) - 2023-12-01
+--------------------------------------------------------------------------
+
+### Added
+- Add `ord balances` to show rune balances (#2782)
+
+### Fixed
+- Fix preview test (#2795)
+- Fix reinscriptions charm (#2793)
+- Fix fee calculation for batch inscribe on same sat (#2785)
+
+### Misc
+- Add `audit-cache` binary to audit Cloudflare caching (#2787)
+- Fix typos (#2791)
+- Add total bytes and proportion to database info (#2783)
+
+[0.12.2](https://github.com/ordinals/ord/releases/tag/0.12.2) - 2023-11-29
+--------------------------------------------------------------------------
+
+### Added
+- Bless cursed inscriptions after Jubilee height (#2656)
+
+### Misc
+- Hide /content/<INSCRIPTION_ID> HTML inscriptions (#2778)
+
+[0.12.1](https://github.com/ordinals/ord/releases/tag/0.12.1) - 2023-11-29
+--------------------------------------------------------------------------
+
+### Added
+- Add commands to etch and list runes (#2544)
+- Add ability to specify sat to batch inscribe (#2770)
+- Allow setting the sat to inscribe (#2765)
+- Batch inscribe on same sat (#2749)
+- Add stuttering curse (#2745)
+- Add batch to preview command (#2752)
+
+### Misc
+- Add `public` to /content Cache-Control headers (#2773)
+- Set CSP origin in deploy script (#2764)
+- Fix typos (#2768)
+- Select further away coins which meet target (#2724)
+- Hide all text (#2753)
+
 [0.12.0](https://github.com/ordinals/ord/releases/tag/0.12.0) - 2023-11-24
 --------------------------------------------------------------------------
 

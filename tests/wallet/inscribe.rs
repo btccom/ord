@@ -1282,7 +1282,7 @@ fn inscribe_can_compress() {
   assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
   assert_regex_match!(
     response.text().unwrap(),
-    "inscription content type `br` is not acceptable"
+    "inscription content encoding `br` is not acceptable. `Accept-Encoding` header not present"
   );
 
   let client = reqwest::blocking::Client::builder()
@@ -1423,7 +1423,7 @@ fn batch_inscribe_works_with_some_destinations_set_and_others_not() {
       ".*
   <dt>address</dt>
   <dd class=monospace>{}</dd>.*",
-      rpc_server.get_change_addresses()[0]
+      rpc_server.change_addresses()[0]
     ),
   );
 
@@ -1433,4 +1433,370 @@ fn batch_inscribe_works_with_some_destinations_set_and_others_not() {
   <dt>address</dt>
   <dd class=monospace>bc1pxwww0ct9ue7e8tdnlmug5m2tamfn7q06sahstg39ys4c9f3340qqxrdu9k</dd>.*",
   );
+}
+
+#[test]
+fn batch_same_sat() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  rpc_server.mine_blocks(1);
+
+  create_wallet(&rpc_server);
+
+  let output = CommandBuilder::new("wallet inscribe --fee-rate 1 --batch batch.yaml")
+    .write("inscription.txt", "Hello World")
+    .write("tulip.png", [0; 555])
+    .write("meow.wav", [0; 2048])
+    .write(
+      "batch.yaml",
+      "mode: same-sat\ninscriptions:\n- file: inscription.txt\n- file: tulip.png\n- file: meow.wav\n"
+    )
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Inscribe>();
+
+  assert_eq!(
+    output.inscriptions[0].location,
+    output.inscriptions[1].location
+  );
+  assert_eq!(
+    output.inscriptions[1].location,
+    output.inscriptions[2].location
+  );
+
+  rpc_server.mine_blocks(1);
+
+  let ord_server = TestServer::spawn_with_args(&rpc_server, &[]);
+
+  let outpoint = output.inscriptions[0].location.outpoint;
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[0].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:0</dd>.*",
+      outpoint
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[1].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:0</dd>.*",
+      outpoint
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[2].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:0</dd>.*",
+      outpoint
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/output/{}", output.inscriptions[0].location.outpoint),
+    format!(r".*<a href=/inscription/{}>.*</a>.*<a href=/inscription/{}>.*</a>.*<a href=/inscription/{}>.*</a>.*", output.inscriptions[0].id, output.inscriptions[1].id, output.inscriptions[2].id),
+  );
+}
+
+#[test]
+fn batch_same_sat_with_parent() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  rpc_server.mine_blocks(1);
+
+  create_wallet(&rpc_server);
+
+  let parent_output = CommandBuilder::new("wallet inscribe --fee-rate 5.0 --file parent.png")
+    .write("parent.png", [1; 520])
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Inscribe>();
+
+  rpc_server.mine_blocks(1);
+
+  let parent_id = parent_output.inscriptions[0].id;
+
+  let output = CommandBuilder::new("wallet inscribe --fee-rate 1 --batch batch.yaml")
+    .write("inscription.txt", "Hello World")
+    .write("tulip.png", [0; 555])
+    .write("meow.wav", [0; 2048])
+    .write(
+      "batch.yaml",
+      format!("mode: same-sat\nparent: {parent_id}\ninscriptions:\n- file: inscription.txt\n- file: tulip.png\n- file: meow.wav\n")
+    )
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Inscribe>();
+
+  assert_eq!(
+    output.inscriptions[0].location,
+    output.inscriptions[1].location
+  );
+  assert_eq!(
+    output.inscriptions[1].location,
+    output.inscriptions[2].location
+  );
+
+  rpc_server.mine_blocks(1);
+
+  let ord_server = TestServer::spawn_with_args(&rpc_server, &[]);
+
+  let txid = output.inscriptions[0].location.outpoint.txid;
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", parent_id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:0:0</dd>.*",
+      txid
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[0].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:1:0</dd>.*",
+      txid
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[1].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:1:0</dd>.*",
+      txid
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/inscription/{}", output.inscriptions[2].id),
+    format!(
+      r".*<dt>location</dt>.*<dd class=monospace>{}:1:0</dd>.*",
+      txid
+    ),
+  );
+
+  ord_server.assert_response_regex(
+    format!("/output/{}", output.inscriptions[0].location.outpoint),
+    format!(r".*<a href=/inscription/{}>.*</a>.*<a href=/inscription/{}>.*</a>.*<a href=/inscription/{}>.*</a>.*", output.inscriptions[0].id, output.inscriptions[1].id, output.inscriptions[2].id),
+  );
+}
+
+#[test]
+fn inscribe_with_sat_arg() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  create_wallet(&rpc_server);
+  rpc_server.mine_blocks(2);
+
+  let Inscribe { inscriptions, .. } = CommandBuilder::new(
+    "--index-sats wallet inscribe --file foo.txt --sat 5010000000 --fee-rate 1",
+  )
+  .write("foo.txt", "FOO")
+  .rpc_server(&rpc_server)
+  .run_and_deserialize_output();
+
+  let inscription = inscriptions[0].id;
+
+  rpc_server.mine_blocks(1);
+
+  TestServer::spawn_with_args(&rpc_server, &["--index-sats"]).assert_response_regex(
+    "/sat/5010000000",
+    format!(".*<a href=/inscription/{inscription}>.*"),
+  );
+
+  TestServer::spawn_with_args(&rpc_server, &[])
+    .assert_response_regex(format!("/content/{inscription}",), "FOO");
+}
+
+#[test]
+fn inscribe_with_sat_arg_fails_if_no_index_or_not_found() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  create_wallet(&rpc_server);
+
+  CommandBuilder::new("wallet inscribe --file foo.txt --sat 5010000000 --fee-rate 1")
+    .write("foo.txt", "FOO")
+    .rpc_server(&rpc_server)
+    .expected_exit_code(1)
+    .expected_stderr("error: index must be built with `--index-sats` to use `--sat`\n")
+    .run_and_extract_stdout();
+
+  CommandBuilder::new("--index-sats wallet inscribe --sat 5000000000 --file foo.txt --fee-rate 1")
+    .write("foo.txt", "FOO")
+    .rpc_server(&rpc_server)
+    .expected_exit_code(1)
+    .expected_stderr("error: could not find sat `5000000000`\n")
+    .run_and_extract_stdout();
+}
+
+#[test]
+fn batch_inscribe_with_sat_argument_with_parent() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  rpc_server.mine_blocks(1);
+
+  assert_eq!(rpc_server.descriptors().len(), 0);
+
+  create_wallet(&rpc_server);
+
+  let parent_output =
+    CommandBuilder::new("--index-sats wallet inscribe --fee-rate 5.0 --file parent.png")
+      .write("parent.png", [1; 520])
+      .rpc_server(&rpc_server)
+      .run_and_deserialize_output::<Inscribe>();
+
+  rpc_server.mine_blocks(1);
+
+  assert_eq!(rpc_server.descriptors().len(), 3);
+
+  let parent_id = parent_output.inscriptions[0].id;
+
+  let output = CommandBuilder::new("--index-sats wallet inscribe --fee-rate 1 --batch batch.yaml")
+    .write("inscription.txt", "Hello World")
+    .write("tulip.png", [0; 555])
+    .write("meow.wav", [0; 2048])
+    .write(
+      "batch.yaml",
+      format!("parent: {parent_id}\nmode: same-sat\nsat: 5000111111\ninscriptions:\n- file: inscription.txt\n- file: tulip.png\n- file: meow.wav\n")
+    )
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Inscribe>();
+
+  rpc_server.mine_blocks(1);
+
+  TestServer::spawn_with_args(&rpc_server, &["--index-sats"]).assert_response_regex(
+    "/sat/5000111111",
+    format!(
+      ".*<a href=/inscription/{}>.*<a href=/inscription/{}>.*<a href=/inscription/{}>.*",
+      output.inscriptions[0].id, output.inscriptions[1].id, output.inscriptions[2].id
+    ),
+  );
+}
+
+#[test]
+fn batch_inscribe_with_sat_arg_fails_if_wrong_mode() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  create_wallet(&rpc_server);
+  rpc_server.mine_blocks(1);
+
+  CommandBuilder::new("wallet inscribe --fee-rate 1 --batch batch.yaml")
+    .write("inscription.txt", "Hello World")
+    .write("tulip.png", [0; 555])
+    .write("meow.wav", [0; 2048])
+    .write(
+      "batch.yaml",
+      "mode: shared-output\nsat: 5000111111\ninscriptions:\n- file: inscription.txt\n- file: tulip.png\n- file: meow.wav\n"
+    )
+    .rpc_server(&rpc_server)
+    .expected_exit_code(1)
+    .expected_stderr("error: `sat` can only be set in `same-sat` mode\n")
+    .run_and_extract_stdout();
+}
+
+#[test]
+fn batch_inscribe_with_fee_rate() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  create_wallet(&rpc_server);
+  rpc_server.mine_blocks(2);
+
+  let set_fee_rate = 1.0;
+
+  let output = CommandBuilder::new(format!("--index-sats wallet inscribe --fee-rate {set_fee_rate} --batch batch.yaml"))
+    .write("inscription.txt", "Hello World")
+    .write("tulip.png", [0; 555])
+    .write("meow.wav", [0; 2048])
+    .write(
+      "batch.yaml",
+      "mode: same-sat\nsat: 5000111111\ninscriptions:\n- file: inscription.txt\n- file: tulip.png\n- file: meow.wav\n"
+    )
+    .rpc_server(&rpc_server)
+    .run_and_deserialize_output::<Inscribe>();
+
+  let commit_tx = &rpc_server.mempool()[0];
+  let mut fee = 0;
+  for input in &commit_tx.input {
+    fee += rpc_server
+      .get_utxo_amount(&input.previous_output)
+      .unwrap()
+      .to_sat();
+  }
+  for output in &commit_tx.output {
+    fee -= output.value;
+  }
+  let fee_rate = fee as f64 / commit_tx.vsize() as f64;
+  pretty_assert_eq!(fee_rate, set_fee_rate);
+
+  let reveal_tx = &rpc_server.mempool()[1];
+  let mut fee = 0;
+  for input in &reveal_tx.input {
+    fee += &commit_tx.output[input.previous_output.vout as usize].value;
+  }
+  for output in &reveal_tx.output {
+    fee -= output.value;
+  }
+  let fee_rate = fee as f64 / reveal_tx.vsize() as f64;
+  pretty_assert_eq!(fee_rate, set_fee_rate);
+
+  assert_eq!(
+    ord::FeeRate::try_from(set_fee_rate)
+      .unwrap()
+      .fee(commit_tx.vsize() + reveal_tx.vsize())
+      .to_sat(),
+    output.total_fees
+  );
+}
+
+#[test]
+fn server_can_decompress_brotli() {
+  let rpc_server = test_bitcoincore_rpc::spawn();
+  rpc_server.mine_blocks(1);
+
+  create_wallet(&rpc_server);
+
+  let Inscribe { inscriptions, .. } =
+    CommandBuilder::new("wallet inscribe --compress --file foo.txt --fee-rate 1".to_string())
+      .write("foo.txt", [0; 350_000])
+      .rpc_server(&rpc_server)
+      .run_and_deserialize_output();
+
+  let inscription = inscriptions[0].id;
+
+  rpc_server.mine_blocks(1);
+
+  let test_server = TestServer::spawn_with_server_args(&rpc_server, &[], &[]);
+
+  test_server.sync_server();
+
+  let client = reqwest::blocking::Client::builder()
+    .brotli(false)
+    .build()
+    .unwrap();
+
+  let response = client
+    .get(
+      test_server
+        .url()
+        .join(format!("/content/{inscription}",).as_ref())
+        .unwrap(),
+    )
+    .send()
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
+
+  let test_server = TestServer::spawn_with_server_args(&rpc_server, &[], &["--decompress"]);
+
+  test_server.sync_server();
+
+  let client = reqwest::blocking::Client::builder()
+    .brotli(false)
+    .build()
+    .unwrap();
+
+  let response = client
+    .get(
+      test_server
+        .url()
+        .join(format!("/content/{inscription}",).as_ref())
+        .unwrap(),
+    )
+    .send()
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(response.bytes().unwrap().deref(), [0; 350_000]);
 }

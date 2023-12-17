@@ -9,8 +9,8 @@ use {
     updater::Updater,
   },
   super::*,
-  crate::subcommand::find::FindRangeOutput,
   crate::wallet::Wallet,
+  crate::{subcommand::find::FindRangeOutput, templates::StatusHtml},
   bitcoin::block::Header,
   bitcoincore_rpc::{json::GetBlockHeaderResult, Client},
   chrono::SubsecRound,
@@ -39,7 +39,7 @@ mod updater;
 #[cfg(test)]
 pub(crate) mod testing;
 
-const SCHEMA_VERSION: u64 = 13;
+const SCHEMA_VERSION: u64 = 14;
 
 macro_rules! define_table {
   ($name:ident, $key:ty, $value:ty) => {
@@ -91,6 +91,7 @@ pub(crate) enum Statistic {
   IndexSats,
   LostSats,
   OutputsTraversed,
+  ReservedRunes,
   Runes,
   SatRanges,
   UnboundInscriptions,
@@ -122,6 +123,7 @@ pub(crate) struct Info {
   sat_ranges: u64,
   stored_bytes: u64,
   tables: BTreeMap<String, TableInfo>,
+  total_bytes: u64,
   pub(crate) transactions: Vec<TransactionInfo>,
   tree_height: u32,
   utxos_indexed: u64,
@@ -133,7 +135,9 @@ pub(crate) struct TableInfo {
   fragmented_bytes: u64,
   leaf_pages: u64,
   metadata_bytes: u64,
+  proportion: f64,
   stored_bytes: u64,
+  total_bytes: u64,
   tree_height: u32,
 }
 
@@ -178,6 +182,7 @@ pub(crate) struct Index {
   index_sats: bool,
   options: Options,
   path: PathBuf,
+  started: DateTime<Utc>,
   unrecoverably_reorged: AtomicBool,
 }
 
@@ -260,6 +265,7 @@ impl Index {
             .unwrap()
             .value()
             != 0;
+
           index_sats = statistics
             .get(&Statistic::IndexSats.key())?
             .unwrap()
@@ -312,9 +318,11 @@ impl Index {
 
           statistics.insert(
             &Statistic::IndexRunes.key(),
-            &u64::from(options.index_runes()),
+            &u64::from(index_runes),
           )?;
-          statistics.insert(&Statistic::IndexSats.key(), &u64::from(options.index_sats))?;
+
+          statistics.insert(&Statistic::IndexSats.key(), &u64::from(index_sats))?;
+
           statistics.insert(&Statistic::Schema.key(), &SCHEMA_VERSION)?;
         }
 
@@ -336,10 +344,11 @@ impl Index {
       first_inscription_height: options.first_inscription_height(),
       genesis_block_coinbase_transaction,
       height_limit: options.height_limit,
-      options: options.clone(),
       index_runes,
       index_sats,
+      options: options.clone(),
       path,
+      started: Utc::now(),
       unrecoverably_reorged: AtomicBool::new(false),
     })
   }
@@ -422,26 +431,84 @@ impl Index {
       .collect()
   }
 
+  pub(crate) fn has_rune_index(&self) -> bool {
+    self.index_runes
+  }
+
   pub(crate) fn has_sat_index(&self) -> bool {
     self.index_sats
+  }
+
+  pub(crate) fn status(&self) -> Result<StatusHtml> {
+    let rtx = self.database.begin_read()?;
+
+    let statistic_to_count = rtx.open_table(STATISTIC_TO_COUNT)?;
+
+    let statistic = |statistic: Statistic| -> Result<u64> {
+      Ok(
+        statistic_to_count
+          .get(statistic.key())?
+          .map(|guard| guard.value())
+          .unwrap_or_default(),
+      )
+    };
+
+    let height = rtx
+      .open_table(HEIGHT_TO_BLOCK_HASH)?
+      .range(0..)?
+      .next_back()
+      .transpose()?
+      .map(|(height, _hash)| height.value());
+
+    let next_height = height.map(|height| height + 1).unwrap_or(0);
+
+    let blessed_inscriptions = statistic(Statistic::BlessedInscriptions)?;
+    let cursed_inscriptions = statistic(Statistic::CursedInscriptions)?;
+
+    Ok(StatusHtml {
+      blessed_inscriptions,
+      cursed_inscriptions,
+      height,
+      inscriptions: blessed_inscriptions + cursed_inscriptions,
+      lost_sats: statistic(Statistic::LostSats)?,
+      minimum_rune_for_next_block: Rune::minimum_at_height(
+        self.options.chain(),
+        Height(next_height),
+      ),
+      rune_index: statistic(Statistic::IndexRunes)? != 0,
+      runes: statistic(Statistic::Runes)?,
+      sat_index: statistic(Statistic::IndexSats)? != 0,
+      started: self.started,
+      unrecoverably_reorged: self.unrecoverably_reorged.load(atomic::Ordering::Relaxed),
+      uptime: (Utc::now() - self.started).to_std()?,
+    })
   }
 
   pub(crate) fn info(&self) -> Result<Info> {
     fn insert_table_info<K: RedbKey + 'static, V: RedbValue + 'static>(
       tables: &mut BTreeMap<String, TableInfo>,
       wtx: &WriteTransaction,
+      database_total_bytes: u64,
       definition: TableDefinition<K, V>,
     ) {
       let stats = wtx.open_table(definition).unwrap().stats().unwrap();
+
+      let fragmented_bytes = stats.fragmented_bytes();
+      let metadata_bytes = stats.metadata_bytes();
+      let stored_bytes = stats.stored_bytes();
+      let total_bytes = stored_bytes + metadata_bytes + fragmented_bytes;
+
       tables.insert(
         definition.name().into(),
         TableInfo {
-          tree_height: stats.tree_height(),
-          leaf_pages: stats.leaf_pages(),
           branch_pages: stats.branch_pages(),
-          stored_bytes: stats.stored_bytes(),
-          metadata_bytes: stats.metadata_bytes(),
-          fragmented_bytes: stats.fragmented_bytes(),
+          fragmented_bytes,
+          leaf_pages: stats.leaf_pages(),
+          metadata_bytes,
+          proportion: total_bytes as f64 / database_total_bytes as f64,
+          stored_bytes,
+          total_bytes,
+          tree_height: stats.tree_height(),
         },
       );
     }
@@ -449,6 +516,7 @@ impl Index {
     fn insert_multimap_table_info<K: RedbKey + 'static, V: RedbValue + RedbKey + 'static>(
       tables: &mut BTreeMap<String, TableInfo>,
       wtx: &WriteTransaction,
+      database_total_bytes: u64,
       definition: MultimapTableDefinition<K, V>,
     ) {
       let stats = wtx
@@ -456,15 +524,23 @@ impl Index {
         .unwrap()
         .stats()
         .unwrap();
+
+      let fragmented_bytes = stats.fragmented_bytes();
+      let metadata_bytes = stats.metadata_bytes();
+      let stored_bytes = stats.stored_bytes();
+      let total_bytes = stored_bytes + metadata_bytes + fragmented_bytes;
+
       tables.insert(
         definition.name().into(),
         TableInfo {
-          tree_height: stats.tree_height(),
-          leaf_pages: stats.leaf_pages(),
           branch_pages: stats.branch_pages(),
-          stored_bytes: stats.stored_bytes(),
-          metadata_bytes: stats.metadata_bytes(),
-          fragmented_bytes: stats.fragmented_bytes(),
+          fragmented_bytes,
+          leaf_pages: stats.leaf_pages(),
+          metadata_bytes,
+          proportion: total_bytes as f64 / database_total_bytes as f64,
+          stored_bytes,
+          total_bytes,
+          tree_height: stats.tree_height(),
         },
       );
     }
@@ -473,31 +549,57 @@ impl Index {
 
     let stats = wtx.stats()?;
 
+    let fragmented_bytes = stats.fragmented_bytes();
+    let metadata_bytes = stats.metadata_bytes();
+    let stored_bytes = stats.stored_bytes();
+    let total_bytes = fragmented_bytes + metadata_bytes + stored_bytes;
+
     let mut tables: BTreeMap<String, TableInfo> = BTreeMap::new();
 
-    insert_multimap_table_info(&mut tables, &wtx, SATPOINT_TO_SEQUENCE_NUMBER);
-    insert_multimap_table_info(&mut tables, &wtx, SAT_TO_SEQUENCE_NUMBER);
-    insert_multimap_table_info(&mut tables, &wtx, SEQUENCE_NUMBER_TO_CHILDREN);
-    insert_table_info(&mut tables, &wtx, HEIGHT_TO_BLOCK_HASH);
-    insert_table_info(&mut tables, &wtx, HEIGHT_TO_BLOCK_HASH);
-    insert_table_info(&mut tables, &wtx, HEIGHT_TO_LAST_SEQUENCE_NUMBER);
-    insert_table_info(&mut tables, &wtx, HOME_INSCRIPTIONS);
-    insert_table_info(&mut tables, &wtx, INSCRIPTION_ID_TO_SEQUENCE_NUMBER);
-    insert_table_info(&mut tables, &wtx, INSCRIPTION_NUMBER_TO_SEQUENCE_NUMBER);
-    insert_table_info(&mut tables, &wtx, OUTPOINT_TO_RUNE_BALANCES);
-    insert_table_info(&mut tables, &wtx, OUTPOINT_TO_SAT_RANGES);
-    insert_table_info(&mut tables, &wtx, OUTPOINT_TO_VALUE);
-    insert_table_info(&mut tables, &wtx, RUNE_ID_TO_RUNE_ENTRY);
-    insert_table_info(&mut tables, &wtx, RUNE_TO_RUNE_ID);
-    insert_table_info(&mut tables, &wtx, SAT_TO_SATPOINT);
-    insert_table_info(&mut tables, &wtx, SEQUENCE_NUMBER_TO_INSCRIPTION_ENTRY);
-    insert_table_info(&mut tables, &wtx, SEQUENCE_NUMBER_TO_RUNE);
-    insert_table_info(&mut tables, &wtx, SEQUENCE_NUMBER_TO_SATPOINT);
-    insert_table_info(&mut tables, &wtx, STATISTIC_TO_COUNT);
-    insert_table_info(&mut tables, &wtx, TRANSACTION_ID_TO_RUNE);
+    insert_multimap_table_info(&mut tables, &wtx, total_bytes, SATPOINT_TO_SEQUENCE_NUMBER);
+    insert_multimap_table_info(&mut tables, &wtx, total_bytes, SAT_TO_SEQUENCE_NUMBER);
+    insert_multimap_table_info(&mut tables, &wtx, total_bytes, SEQUENCE_NUMBER_TO_CHILDREN);
+    insert_table_info(&mut tables, &wtx, total_bytes, HEIGHT_TO_BLOCK_HASH);
+    insert_table_info(&mut tables, &wtx, total_bytes, HEIGHT_TO_BLOCK_HASH);
     insert_table_info(
       &mut tables,
       &wtx,
+      total_bytes,
+      HEIGHT_TO_LAST_SEQUENCE_NUMBER,
+    );
+    insert_table_info(&mut tables, &wtx, total_bytes, HOME_INSCRIPTIONS);
+    insert_table_info(
+      &mut tables,
+      &wtx,
+      total_bytes,
+      INSCRIPTION_ID_TO_SEQUENCE_NUMBER,
+    );
+    insert_table_info(
+      &mut tables,
+      &wtx,
+      total_bytes,
+      INSCRIPTION_NUMBER_TO_SEQUENCE_NUMBER,
+    );
+    insert_table_info(&mut tables, &wtx, total_bytes, OUTPOINT_TO_RUNE_BALANCES);
+    insert_table_info(&mut tables, &wtx, total_bytes, OUTPOINT_TO_SAT_RANGES);
+    insert_table_info(&mut tables, &wtx, total_bytes, OUTPOINT_TO_VALUE);
+    insert_table_info(&mut tables, &wtx, total_bytes, RUNE_ID_TO_RUNE_ENTRY);
+    insert_table_info(&mut tables, &wtx, total_bytes, RUNE_TO_RUNE_ID);
+    insert_table_info(&mut tables, &wtx, total_bytes, SAT_TO_SATPOINT);
+    insert_table_info(
+      &mut tables,
+      &wtx,
+      total_bytes,
+      SEQUENCE_NUMBER_TO_INSCRIPTION_ENTRY,
+    );
+    insert_table_info(&mut tables, &wtx, total_bytes, SEQUENCE_NUMBER_TO_RUNE);
+    insert_table_info(&mut tables, &wtx, total_bytes, SEQUENCE_NUMBER_TO_SATPOINT);
+    insert_table_info(&mut tables, &wtx, total_bytes, STATISTIC_TO_COUNT);
+    insert_table_info(&mut tables, &wtx, total_bytes, TRANSACTION_ID_TO_RUNE);
+    insert_table_info(
+      &mut tables,
+      &wtx,
+      total_bytes,
       WRITE_TRANSACTION_STARTING_BLOCK_COUNT_TO_TIMESTAMP,
     );
 
@@ -520,7 +622,6 @@ impl Index {
         .map(|x| x.value())
         .unwrap_or(0);
       Info {
-        index_path: self.path.clone(),
         blocks_indexed: wtx
           .open_table(HEIGHT_TO_BLOCK_HASH)?
           .range(0..)?
@@ -529,15 +630,17 @@ impl Index {
           .map(|(height, _hash)| height.value() + 1)
           .unwrap_or(0),
         branch_pages: stats.branch_pages(),
-        fragmented_bytes: stats.fragmented_bytes(),
+        fragmented_bytes,
         index_file_size: fs::metadata(&self.path)?.len(),
+        index_path: self.path.clone(),
         leaf_pages: stats.leaf_pages(),
-        metadata_bytes: stats.metadata_bytes(),
-        sat_ranges,
+        metadata_bytes,
         outputs_traversed,
         page_size: stats.page_size(),
-        stored_bytes: stats.stored_bytes(),
+        sat_ranges,
+        stored_bytes,
         tables,
+        total_bytes,
         transactions: wtx
           .open_table(WRITE_TRANSACTION_STARTING_BLOCK_COUNT_TO_TIMESTAMP)?
           .range(0..)?
@@ -654,10 +757,6 @@ impl Index {
     Ok(())
   }
 
-  pub(crate) fn is_unrecoverably_reorged(&self) -> bool {
-    self.unrecoverably_reorged.load(atomic::Ordering::Relaxed)
-  }
-
   fn begin_read(&self) -> Result<rtx::Rtx> {
     Ok(rtx::Rtx(self.database.begin_read()?))
   }
@@ -673,7 +772,7 @@ impl Index {
     let value = statistic_to_count
       .get(&(statistic.key()))?
       .map(|x| x.value())
-      .unwrap_or(0)
+      .unwrap_or_default()
       + n;
     statistic_to_count.insert(&statistic.key(), &value)?;
     Ok(())
@@ -690,7 +789,7 @@ impl Index {
       .get(&statistic.key())
       .unwrap()
       .map(|x| x.value())
-      .unwrap_or(0)
+      .unwrap_or_default()
   }
 
   pub(crate) fn block_count(&self) -> Result<u32> {
@@ -789,10 +888,36 @@ impl Index {
     Ok(entries)
   }
 
+  pub(crate) fn get_rune_balance(&self, outpoint: OutPoint, id: RuneId) -> Result<u128> {
+    let rtx = self.database.begin_read()?;
+
+    let outpoint_to_balances = rtx.open_table(OUTPOINT_TO_RUNE_BALANCES)?;
+
+    let Some(balances) = outpoint_to_balances.get(&outpoint.store())? else {
+      return Ok(0);
+    };
+
+    let balances_buffer = balances.value();
+
+    let mut i = 0;
+    while i < balances_buffer.len() {
+      let (balance_id, length) = runes::varint::decode(&balances_buffer[i..]);
+      i += length;
+      let (amount, length) = runes::varint::decode(&balances_buffer[i..]);
+      i += length;
+
+      if RuneId::try_from(balance_id).unwrap() == id {
+        return Ok(amount);
+      }
+    }
+
+    Ok(0)
+  }
+
   pub(crate) fn get_rune_balances_for_outpoint(
     &self,
     outpoint: OutPoint,
-  ) -> Result<Vec<(Rune, Pile)>> {
+  ) -> Result<Vec<(SpacedRune, Pile)>> {
     let rtx = self.database.begin_read()?;
 
     let outpoint_to_balances = rtx.open_table(OUTPOINT_TO_RUNE_BALANCES)?;
@@ -808,9 +933,9 @@ impl Index {
     let mut balances = Vec::new();
     let mut i = 0;
     while i < balances_buffer.len() {
-      let (id, length) = runes::varint::decode(&balances_buffer[i..]).unwrap();
+      let (id, length) = runes::varint::decode(&balances_buffer[i..]);
       i += length;
-      let (amount, length) = runes::varint::decode(&balances_buffer[i..]).unwrap();
+      let (amount, length) = runes::varint::decode(&balances_buffer[i..]);
       i += length;
 
       let id = RuneId::try_from(id).unwrap();
@@ -818,7 +943,7 @@ impl Index {
       let entry = RuneEntry::load(id_to_rune_entries.get(id.store())?.unwrap().value());
 
       balances.push((
-        entry.rune,
+        entry.spaced_rune(),
         Pile {
           amount,
           divisibility: entry.divisibility,
@@ -830,37 +955,79 @@ impl Index {
     Ok(balances)
   }
 
-  #[cfg(test)]
-  pub(crate) fn get_rune_balances(&self) -> Vec<(OutPoint, Vec<(RuneId, u128)>)> {
+  pub(crate) fn get_runic_outputs(&self, outpoints: &[OutPoint]) -> Result<BTreeSet<OutPoint>> {
+    let rtx = self.database.begin_read()?;
+
+    let outpoint_to_balances = rtx.open_table(OUTPOINT_TO_RUNE_BALANCES)?;
+
+    let mut runic = BTreeSet::new();
+
+    for outpoint in outpoints {
+      if outpoint_to_balances.get(&outpoint.store())?.is_some() {
+        runic.insert(*outpoint);
+      }
+    }
+
+    Ok(runic)
+  }
+
+  pub(crate) fn get_rune_balance_map(&self) -> Result<BTreeMap<Rune, BTreeMap<OutPoint, u128>>> {
+    let outpoint_balances = self.get_rune_balances()?;
+
+    let rtx = self.database.begin_read()?;
+
+    let rune_id_to_rune_entry = rtx.open_table(RUNE_ID_TO_RUNE_ENTRY)?;
+
+    let mut rune_balances: BTreeMap<Rune, BTreeMap<OutPoint, u128>> = BTreeMap::new();
+
+    for (outpoint, balances) in outpoint_balances {
+      for (rune_id, amount) in balances {
+        let rune = RuneEntry::load(
+          rune_id_to_rune_entry
+            .get(&rune_id.store())?
+            .unwrap()
+            .value(),
+        )
+        .rune;
+
+        *rune_balances
+          .entry(rune)
+          .or_default()
+          .entry(outpoint)
+          .or_default() += amount;
+      }
+    }
+
+    Ok(rune_balances)
+  }
+
+  pub(crate) fn get_rune_balances(&self) -> Result<Vec<(OutPoint, Vec<(RuneId, u128)>)>> {
     let mut result = Vec::new();
 
     for entry in self
       .database
-      .begin_read()
-      .unwrap()
-      .open_table(OUTPOINT_TO_RUNE_BALANCES)
-      .unwrap()
-      .iter()
-      .unwrap()
+      .begin_read()?
+      .open_table(OUTPOINT_TO_RUNE_BALANCES)?
+      .iter()?
     {
-      let (outpoint, balances_buffer) = entry.unwrap();
+      let (outpoint, balances_buffer) = entry?;
       let outpoint = OutPoint::load(*outpoint.value());
       let balances_buffer = balances_buffer.value();
 
       let mut balances = Vec::new();
       let mut i = 0;
       while i < balances_buffer.len() {
-        let (id, length) = runes::varint::decode(&balances_buffer[i..]).unwrap();
+        let (id, length) = runes::varint::decode(&balances_buffer[i..]);
         i += length;
-        let (balance, length) = runes::varint::decode(&balances_buffer[i..]).unwrap();
+        let (balance, length) = runes::varint::decode(&balances_buffer[i..]);
         i += length;
-        balances.push((RuneId::try_from(id).unwrap(), balance));
+        balances.push((RuneId::try_from(id)?, balance));
       }
 
       result.push((outpoint, balances));
     }
 
-    result
+    Ok(result)
   }
 
   pub(crate) fn block_header(&self, hash: BlockHash) -> Result<Option<Header>> {
@@ -1016,26 +1183,41 @@ impl Index {
     Ok((children, more))
   }
 
-  pub(crate) fn get_etching(&self, txid: Txid) -> Result<Option<Rune>> {
-    Ok(
-      self
-        .database
-        .begin_read()?
-        .open_table(TRANSACTION_ID_TO_RUNE)?
-        .get(&txid.store())?
-        .map(|entry| Rune(entry.value())),
-    )
+  pub(crate) fn get_etching(&self, txid: Txid) -> Result<Option<SpacedRune>> {
+    let rtx = self.database.begin_read()?;
+
+    let transaction_id_to_rune = rtx.open_table(TRANSACTION_ID_TO_RUNE)?;
+    let Some(rune) = transaction_id_to_rune.get(&txid.store())? else {
+      return Ok(None);
+    };
+
+    let rune_to_rune_id = rtx.open_table(RUNE_TO_RUNE_ID)?;
+    let id = rune_to_rune_id.get(rune.value())?.unwrap();
+
+    let rune_id_to_rune_entry = rtx.open_table(RUNE_ID_TO_RUNE_ENTRY)?;
+    let entry = rune_id_to_rune_entry.get(&id.value())?.unwrap();
+
+    Ok(Some(RuneEntry::load(entry.value()).spaced_rune()))
   }
 
-  pub(crate) fn get_rune_by_sequence_number(&self, sequence_number: u32) -> Result<Option<Rune>> {
-    Ok(
-      self
-        .database
-        .begin_read()?
-        .open_table(SEQUENCE_NUMBER_TO_RUNE)?
-        .get(sequence_number)?
-        .map(|entry| Rune(entry.value())),
-    )
+  pub(crate) fn get_rune_by_sequence_number(
+    &self,
+    sequence_number: u32,
+  ) -> Result<Option<SpacedRune>> {
+    let rtx = self.database.begin_read()?;
+
+    let sequence_number_to_rune = rtx.open_table(SEQUENCE_NUMBER_TO_RUNE)?;
+    let Some(rune) = sequence_number_to_rune.get(sequence_number)? else {
+      return Ok(None);
+    };
+
+    let rune_to_rune_id = rtx.open_table(RUNE_TO_RUNE_ID)?;
+    let id = rune_to_rune_id.get(rune.value())?.unwrap();
+
+    let rune_id_to_rune_entry = rtx.open_table(RUNE_ID_TO_RUNE_ENTRY)?;
+    let entry = rune_id_to_rune_entry.get(&id.value())?.unwrap();
+
+    Ok(Some(RuneEntry::load(entry.value()).spaced_rune()))
   }
 
   pub(crate) fn get_inscription_ids_by_sat(&self, sat: Sat) -> Result<Vec<InscriptionId>> {
@@ -1292,7 +1474,8 @@ impl Index {
     )
   }
 
-  pub(crate) fn find(&self, sat: u64) -> Result<Option<SatPoint>> {
+  pub(crate) fn find(&self, sat: Sat) -> Result<Option<SatPoint>> {
+    let sat = sat.0;
     let rtx = self.begin_read()?;
 
     if rtx.block_count()? <= Sat(sat).height().n() {
@@ -1321,9 +1504,11 @@ impl Index {
 
   pub(crate) fn find_range(
     &self,
-    range_start: u64,
-    range_end: u64,
+    range_start: Sat,
+    range_end: Sat,
   ) -> Result<Option<Vec<FindRangeOutput>>> {
+    let range_start = range_start.0;
+    let range_end = range_end.0;
     let rtx = self.begin_read()?;
 
     if rtx.block_count()? < Sat(range_end - 1).height().n() + 1 {
@@ -1682,7 +1867,7 @@ impl Index {
             .any(|entry| entry.unwrap().value() == sequence_number));
 
           // we do not track common sats (only the sat ranges)
-          if !Sat(sat).is_common() {
+          if !Sat(sat).common() {
             assert_eq!(
               SatPoint::load(
                 *rtx
@@ -2062,7 +2247,7 @@ mod tests {
   fn find_first_sat() {
     let context = Context::builder().arg("--index-sats").build();
     assert_eq!(
-      context.index.find(0).unwrap().unwrap(),
+      context.index.find(Sat(0)).unwrap().unwrap(),
       SatPoint {
         outpoint: "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b:0"
           .parse()
@@ -2076,7 +2261,7 @@ mod tests {
   fn find_second_sat() {
     let context = Context::builder().arg("--index-sats").build();
     assert_eq!(
-      context.index.find(1).unwrap().unwrap(),
+      context.index.find(Sat(1)).unwrap().unwrap(),
       SatPoint {
         outpoint: "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b:0"
           .parse()
@@ -2091,7 +2276,7 @@ mod tests {
     let context = Context::builder().arg("--index-sats").build();
     context.mine_blocks(1);
     assert_eq!(
-      context.index.find(50 * COIN_VALUE).unwrap().unwrap(),
+      context.index.find(Sat(50 * COIN_VALUE)).unwrap().unwrap(),
       SatPoint {
         outpoint: "30f2f037629c6a21c1f40ed39b9bd6278df39762d68d07f49582b23bcb23386a:0"
           .parse()
@@ -2104,7 +2289,7 @@ mod tests {
   #[test]
   fn find_unmined_sat() {
     let context = Context::builder().arg("--index-sats").build();
-    assert_eq!(context.index.find(50 * COIN_VALUE).unwrap(), None);
+    assert_eq!(context.index.find(Sat(50 * COIN_VALUE)).unwrap(), None);
   }
 
   #[test]
@@ -2118,7 +2303,7 @@ mod tests {
     });
     context.mine_blocks(1);
     assert_eq!(
-      context.index.find(50 * COIN_VALUE).unwrap().unwrap(),
+      context.index.find(Sat(50 * COIN_VALUE)).unwrap().unwrap(),
       SatPoint {
         outpoint: OutPoint::new(spend_txid, 0),
         offset: 0,
@@ -3051,6 +3236,63 @@ mod tests {
   }
 
   #[test]
+  fn inscriptions_are_uncursed_after_jubilee() {
+    for context in Context::configurations() {
+      context.mine_blocks(108);
+
+      let witness = envelope(&[
+        b"ord",
+        &[1],
+        b"text/plain;charset=utf-8",
+        &[1],
+        b"text/plain;charset=utf-8",
+      ]);
+
+      let txid = context.rpc_server.broadcast_tx(TransactionTemplate {
+        inputs: &[(1, 0, 0, witness.clone())],
+        ..Default::default()
+      });
+
+      let inscription_id = InscriptionId { txid, index: 0 };
+
+      context.mine_blocks(1);
+
+      assert_eq!(context.rpc_server.height(), 109);
+
+      assert_eq!(
+        context
+          .index
+          .get_inscription_entry(inscription_id)
+          .unwrap()
+          .unwrap()
+          .inscription_number,
+        -1
+      );
+
+      let txid = context.rpc_server.broadcast_tx(TransactionTemplate {
+        inputs: &[(2, 0, 0, witness)],
+        ..Default::default()
+      });
+
+      let inscription_id = InscriptionId { txid, index: 0 };
+
+      context.mine_blocks(1);
+
+      assert_eq!(context.rpc_server.height(), 110);
+
+      assert_eq!(
+        context
+          .index
+          .get_inscription_entry(inscription_id)
+          .unwrap()
+          .unwrap()
+          .inscription_number,
+        0
+      );
+    }
+  }
+
+  #[test]
   fn duplicate_field_inscriptions_are_cursed() {
     for context in Context::configurations() {
       context.mine_blocks(1);
@@ -3150,7 +3392,45 @@ mod tests {
   }
 
   #[test]
+  fn inscriptions_with_stutter_are_cursed() {
+    for context in Context::configurations() {
+      context.mine_blocks(1);
+
+      let script = script::Builder::new()
+        .push_opcode(opcodes::OP_FALSE)
+        .push_opcode(opcodes::OP_FALSE)
+        .push_opcode(opcodes::all::OP_IF)
+        .push_slice(b"ord")
+        .push_slice([])
+        .push_opcode(opcodes::all::OP_PUSHNUM_1)
+        .push_opcode(opcodes::all::OP_ENDIF)
+        .into_script();
+
+      let witness = Witness::from_slice(&[script.into_bytes(), Vec::new()]);
+
+      let txid = context.rpc_server.broadcast_tx(TransactionTemplate {
+        inputs: &[(1, 0, 0, witness)],
+        ..Default::default()
+      });
+
+      let inscription_id = InscriptionId { txid, index: 0 };
+
+      context.mine_blocks(1);
+
+      assert_eq!(
+        context
+          .index
+          .get_inscription_entry(inscription_id)
+          .unwrap()
+          .unwrap()
+          .inscription_number,
+        -1
+      );
+    }
+  }
+
   // https://github.com/ordinals/ord/issues/2062
+  #[test]
   fn zero_value_transaction_inscription_not_cursed_but_unbound() {
     for context in Context::configurations() {
       context.mine_blocks(1);
@@ -3358,7 +3638,6 @@ mod tests {
 
       let txid = context.rpc_server.broadcast_tx(TransactionTemplate {
         inputs: &[(1, 0, 0, witness)],
-
         ..Default::default()
       });
 

@@ -106,13 +106,15 @@ impl State {
       }
 
       for (vout, txout) in tx.output.iter().enumerate() {
-        self.utxos.insert(
-          OutPoint {
-            txid: tx.txid(),
-            vout: vout.try_into().unwrap(),
-          },
-          Amount::from_sat(txout.value),
-        );
+        if !txout.script_pubkey.is_op_return() {
+          self.utxos.insert(
+            OutPoint {
+              txid: tx.txid(),
+              vout: vout.try_into().unwrap(),
+            },
+            Amount::from_sat(txout.value),
+          );
+        }
       }
     }
 
@@ -144,12 +146,18 @@ impl State {
       });
     }
 
-    let value_per_output = (total_value - template.fee) / template.outputs as u64;
+    let value_per_output = if template.outputs > 0 {
+      (total_value - template.fee) / template.outputs as u64
+    } else {
+      0
+    };
 
-    assert_eq!(
-      value_per_output * template.outputs as u64 + template.fee,
-      total_value
-    );
+    if template.outputs > 0 {
+      assert_eq!(
+        value_per_output * template.outputs as u64 + template.fee,
+        total_value
+      );
+    }
 
     let mut tx = Transaction {
       version: 0,
