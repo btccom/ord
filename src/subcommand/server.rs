@@ -226,6 +226,7 @@ impl Server {
         .route("/input/:block/:transaction/:input", get(Self::input))
         .route("/numbers", get(Self::numbers))
         .route("/inscription/:inscription_query", get(Self::inscription))
+        .route("/number/:inscription_query", get(Self::inscription))
         .route("/inscriptions", get(Self::inscriptions))
         .route("/inscriptions/:page", get(Self::inscriptions_paginated))
         .route(
