@@ -15,6 +15,7 @@ pub mod supply;
 pub mod teleburn;
 pub mod traits;
 pub mod wallet;
+mod tools;
 
 #[derive(Debug, Parser)]
 pub(crate) enum Subcommand {
@@ -38,6 +39,8 @@ pub(crate) enum Subcommand {
   Runes,
   #[command(about = "Run the explorer server")]
   Server(server::Server),
+  #[command(about = "Run the tools server")]
+  Tools(tools::Tools),
   #[command(about = "Display information about a block's subsidy")]
   Subsidy(subsidy::Subsidy),
   #[command(about = "Display Bitcoin supply information")]
@@ -67,6 +70,11 @@ impl Subcommand {
         let handle = axum_server::Handle::new();
         LISTENERS.lock().unwrap().push(handle.clone());
         server.run(options, index, handle)
+      }
+      Self::Tools(tools) => {
+        let handle = axum_server::Handle::new();
+        LISTENERS.lock().unwrap().push(handle.clone());
+        tools.run(options, handle)
       }
       Self::Subsidy(subsidy) => subsidy.run(),
       Self::Supply => supply::run(),
