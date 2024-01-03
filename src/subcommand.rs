@@ -9,7 +9,7 @@ pub mod list;
 pub mod parse;
 mod preview;
 pub mod runes;
-mod server;
+pub(crate) mod server;
 pub mod subsidy;
 pub mod supply;
 pub mod teleburn;
@@ -49,7 +49,7 @@ pub(crate) enum Subcommand {
   Teleburn(teleburn::Teleburn),
   #[command(about = "Display satoshi traits")]
   Traits(traits::Traits),
-  #[command(subcommand, about = "Wallet commands")]
+  #[command(about = "Wallet commands")]
   Wallet(wallet::Wallet),
 }
 
@@ -57,7 +57,7 @@ impl Subcommand {
   pub(crate) fn run(self, options: Options) -> SubcommandResult {
     match self {
       Self::Balances => balances::run(options),
-      Self::Decode(decode) => decode.run(),
+      Self::Decode(decode) => decode.run(options),
       Self::Epochs => epochs::run(),
       Self::Find(find) => find.run(options),
       Self::Index(index) => index.run(options),
