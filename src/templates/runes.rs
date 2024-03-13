@@ -1,8 +1,8 @@
 use super::*;
 
-#[derive(Boilerplate)]
-pub(crate) struct RunesHtml {
-  pub(crate) entries: Vec<(RuneId, RuneEntry)>,
+#[derive(Boilerplate, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunesHtml {
+  pub entries: Vec<(RuneId, RuneEntry)>,
 }
 
 impl PageContent for RunesHtml {

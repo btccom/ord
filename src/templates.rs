@@ -1,35 +1,36 @@
 use {super::*, boilerplate::Boilerplate};
 
 pub(crate) use {
-  block::{BlockHtml, BlockJson},
-  blocks::BlocksHtml,
-  children::{ChildrenHtml, ChildrenJson},
+  block::BlockHtml,
+  children::ChildrenHtml,
   clock::ClockSvg,
   collections::CollectionsHtml,
   home::HomeHtml,
   iframe::Iframe,
   input::InputHtml,
-  inscription::{InscriptionHtml, InscriptionJson},
-  inscriptions::{InscriptionsHtml, InscriptionsJson},
+  inscription::InscriptionHtml,
+  inscriptions::InscriptionsHtml,
   inscriptions_block::InscriptionsBlockHtml,
   metadata::MetadataHtml,
-  output::{OutputHtml, OutputJson},
+  output::OutputHtml,
   preview::{
     PreviewAudioHtml, PreviewCodeHtml, PreviewFontHtml, PreviewImageHtml, PreviewMarkdownHtml,
     PreviewModelHtml, PreviewPdfHtml, PreviewTextHtml, PreviewUnknownHtml, PreviewVideoHtml,
   },
   range::RangeHtml,
   rare::RareTxt,
-  rune::RuneHtml,
-  runes::RunesHtml,
-  sat::{SatHtml, SatInscriptionJson, SatInscriptionsJson, SatJson},
+  rune_balances::RuneBalancesHtml,
+  sat::SatHtml,
   server_config::ServerConfig,
-  status::StatusHtml,
+};
+
+pub use {
+  blocks::BlocksHtml, rune::RuneHtml, runes::RunesHtml, status::StatusHtml,
   transaction::TransactionHtml,
 };
 
 pub mod block;
-mod blocks;
+pub mod blocks;
 mod children;
 mod clock;
 pub mod collections;
@@ -44,11 +45,12 @@ pub mod output;
 mod preview;
 mod range;
 mod rare;
-mod rune;
-mod runes;
+pub mod rune;
+pub mod rune_balances;
+pub mod runes;
 pub mod sat;
-mod status;
-mod transaction;
+pub mod status;
+pub mod transaction;
 
 #[derive(Boilerplate)]
 pub(crate) struct PageHtml<T: PageContent> {
@@ -74,7 +76,7 @@ where
 
   fn superscript(&self) -> String {
     if self.config.chain == Chain::Mainnet {
-      "alpha".into()
+      "beta".into()
     } else {
       self.config.chain.to_string()
     }
@@ -134,7 +136,9 @@ mod tests {
     <meta property=og:image content='https://signet.ordinals.com/static/favicon.png'>
     <meta property=twitter:card content=summary>
     <title>Foo</title>
-    <link rel=alternate href=/feed.xml type=application/rss\+xml title='Inscription RSS Feed'>
+    <link rel=alternate href=/feed.xml type=application/rss\+xml title='Inscription Feed'>
+    <link rel=icon href=/static/favicon.png>
+    <link rel=icon href=/static/favicon.svg>
     <link rel=stylesheet href=/static/index.css>
     <link rel=stylesheet href=/static/modern-normalize.css>
     <script src=/static/index.js defer></script>
@@ -142,7 +146,7 @@ mod tests {
   <body>
   <header>
     <nav>
-      <a href=/ title=home>Ordinals<sup>alpha</sup></a>
+      <a href=/ title=home>Ordinals<sup>beta</sup></a>
       .*
       <a href=/clock title=clock>.*</a>
       <a href=/rare.txt title=rare>.*</a>
@@ -172,7 +176,7 @@ mod tests {
         index_sats: true,
         ..Default::default()
       })),
-      r".*<nav>\s*<a href=/ title=home>Ordinals<sup>alpha</sup></a>.*"
+      r".*<nav>\s*<a href=/ title=home>Ordinals<sup>beta</sup></a>.*"
     );
   }
 
@@ -186,7 +190,7 @@ mod tests {
         index_sats: false,
         ..Default::default()
       })),
-      r".*<nav>\s*<a href=/ title=home>Ordinals<sup>alpha</sup></a>.*<a href=/clock title=clock>.*</a>\s*<form action=/search.*",
+      r".*<nav>\s*<a href=/ title=home>Ordinals<sup>beta</sup></a>.*<a href=/clock title=clock>.*</a>\s*<form action=/search.*",
     );
   }
 

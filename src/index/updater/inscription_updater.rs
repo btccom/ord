@@ -30,6 +30,7 @@ enum Origin {
     pointer: Option<u64>,
     reinscription: bool,
     unbound: bool,
+    vindicated: bool,
   },
   Old {
     old_satpoint: SatPoint,
@@ -39,7 +40,9 @@ enum Origin {
 pub(super) struct InscriptionUpdater<'a, 'db, 'tx> {
   pub(super) blessed_inscription_count: u64,
   pub(super) chain: Chain,
+  pub(super) content_type_to_count: &'a mut Table<'db, 'tx, Option<&'static [u8]>, u64>,
   pub(super) cursed_inscription_count: u64,
+  pub(super) event_sender: Option<&'a Sender<Event>>,
   pub(super) flotsam: Vec<Flotsam>,
   pub(super) height: u32,
   pub(super) home_inscription_count: u64,
@@ -67,7 +70,7 @@ pub(super) struct InscriptionUpdater<'a, 'db, 'tx> {
 }
 
 impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
-  pub(super) fn index_envelopes(
+  pub(super) fn index_inscriptions(
     &mut self,
     tx: &Transaction,
     txid: Txid,
@@ -76,6 +79,7 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
     let mut floating_inscriptions = Vec::new();
     let mut id_counter = 0;
     let mut inscribed_offsets = BTreeMap::new();
+    let jubilant = self.height >= self.chain.jubilee_height();
     let mut total_input_value = 0;
     let total_output_value = tx.output.iter().map(|txout| txout.value).sum::<u64>();
 
@@ -142,9 +146,7 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           index: id_counter,
         };
 
-        let curse = if self.height >= self.chain.jubilee_height() {
-          None
-        } else if inscription.payload.unrecognized_even_field {
+        let curse = if inscription.payload.unrecognized_even_field {
           Some(Curse::UnrecognizedEvenField)
         } else if inscription.payload.duplicate_field {
           Some(Curse::DuplicateField)
@@ -167,17 +169,18 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
             let initial_inscription_sequence_number =
               self.id_to_sequence_number.get(id.store())?.unwrap().value();
 
-            let initial_inscription_is_cursed = InscriptionEntry::load(
+            let entry = InscriptionEntry::load(
               self
                 .sequence_number_to_entry
                 .get(initial_inscription_sequence_number)?
                 .unwrap()
                 .value(),
-            )
-            .inscription_number
-              < 0;
+            );
 
-            if initial_inscription_is_cursed {
+            let initial_inscription_was_cursed_or_vindicated =
+              entry.inscription_number < 0 || Charm::Vindicated.is_set(entry.charms);
+
+            if initial_inscription_was_cursed_or_vindicated {
               None
             } else {
               Some(Curse::Reinscription)
@@ -187,27 +190,38 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           None
         };
 
-        let unbound = current_input_value == 0
-          || curse == Some(Curse::UnrecognizedEvenField)
-          || inscription.payload.unrecognized_even_field;
-
         let offset = inscription
           .payload
           .pointer()
           .filter(|&pointer| pointer < total_output_value)
           .unwrap_or(offset);
 
+        let content_type = inscription.payload.content_type.as_deref();
+
+        let content_type_count = self
+          .content_type_to_count
+          .get(content_type)?
+          .map(|entry| entry.value())
+          .unwrap_or_default();
+
+        self
+          .content_type_to_count
+          .insert(content_type, content_type_count + 1)?;
+
         floating_inscriptions.push(Flotsam {
           inscription_id,
           offset,
           origin: Origin::New {
-            reinscription: inscribed_offsets.get(&offset).is_some(),
-            cursed: curse.is_some(),
+            cursed: curse.is_some() && !jubilant,
             fee: 0,
             hidden: inscription.payload.hidden(),
             parent: inscription.payload.parent(),
             pointer: inscription.payload.pointer(),
-            unbound,
+            reinscription: inscribed_offsets.get(&offset).is_some(),
+            unbound: current_input_value == 0
+              || curse == Some(Curse::UnrecognizedEvenField)
+              || inscription.payload.unrecognized_even_field,
+            vindicated: curse.is_some() && jubilant,
           },
         });
 
@@ -387,14 +401,23 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           .satpoint_to_sequence_number
           .remove_all(&old_satpoint.store())?;
 
-        (
-          false,
-          self
-            .id_to_sequence_number
-            .get(&inscription_id.store())?
-            .unwrap()
-            .value(),
-        )
+        let sequence_number = self
+          .id_to_sequence_number
+          .get(&inscription_id.store())?
+          .unwrap()
+          .value();
+
+        if let Some(sender) = self.event_sender {
+          sender.blocking_send(Event::InscriptionTransferred {
+            block_height: self.height,
+            inscription_id,
+            new_location: new_satpoint,
+            old_location: old_satpoint,
+            sequence_number,
+          })?;
+        }
+
+        (false, sequence_number)
       }
       Origin::New {
         cursed,
@@ -404,17 +427,15 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
         pointer: _,
         reinscription,
         unbound,
+        vindicated,
       } => {
         let inscription_number = if cursed {
           let number: i32 = self.cursed_inscription_count.try_into().unwrap();
           self.cursed_inscription_count += 1;
-
-          // because cursed numbers start at -1
           -(number + 1)
         } else {
           let number: i32 = self.blessed_inscription_count.try_into().unwrap();
           self.blessed_inscription_count += 1;
-
           number
         };
 
@@ -467,11 +488,15 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           Charm::Unbound.set(&mut charms);
         }
 
+        if vindicated {
+          Charm::Vindicated.set(&mut charms);
+        }
+
         if let Some(Sat(n)) = sat {
           self.sat_to_sequence_number.insert(&n, &sequence_number)?;
         }
 
-        let parent = match parent {
+        let parent_sequence_number = match parent {
           Some(parent_id) => {
             let parent_sequence_number = self
               .id_to_sequence_number
@@ -487,6 +512,17 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
           None => None,
         };
 
+        if let Some(sender) = self.event_sender {
+          sender.blocking_send(Event::InscriptionCreated {
+            block_height: self.height,
+            charms,
+            inscription_id,
+            location: (!unbound).then_some(new_satpoint),
+            parent_inscription_id: parent,
+            sequence_number,
+          })?;
+        }
+
         self.sequence_number_to_entry.insert(
           sequence_number,
           &InscriptionEntry {
@@ -495,7 +531,7 @@ impl<'a, 'db, 'tx> InscriptionUpdater<'a, 'db, 'tx> {
             height: self.height,
             id: inscription_id,
             inscription_number,
-            parent,
+            parent: parent_sequence_number,
             sat,
             sequence_number,
             timestamp: self.timestamp,
