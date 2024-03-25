@@ -1,4 +1,4 @@
-<h1>Inscription {{ self.number }}</h1>
+<div class=inscription-page>
 <div class=inscription>
 %% if let Some(previous) = self.previous {
 <a class=prev href=/inscription/{{previous}}>❮</a>
@@ -12,6 +12,8 @@
 <div>❯</div>
 %% }
 </div>
+<div class=inscription-right>
+<h1>Inscription {{ self.number }}</h1>
 <dl>
 %% if !self.children.is_empty() {
   <dt>children</dt>
@@ -111,5 +113,7 @@
   <dd><a href=/rune/{{ rune }}>{{ rune }}</a></dd>
 %% }
 </dl>
+</div>
+</div>
 </div>
 </div>
