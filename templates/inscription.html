@@ -41,6 +41,10 @@
     </div>
   </dd>
 %% }
+%% if let Some(rune) = self.rune {
+  <dt>rune</dt>
+  <dd><a href=/rune/{{ rune }}>{{ rune }}</a></dd>
+%% }
   <dt>id</dt>
   <dd class=monospace>{{ self.id }}</dd>
 %% if self.charms != 0 {
@@ -113,10 +117,6 @@
   <dd>{{ self.satpoint.offset }}</dd>
   <dt>ethereum teleburn address</dt>
   <dd>{{ teleburn::Ethereum::from(self.id) }}</dd>
-%% if let Some(rune) = self.rune {
-  <dt>rune</dt>
-  <dd><a href=/rune/{{ rune }}>{{ rune }}</a></dd>
-%% }
 </dl>
 </div>
 </div>
