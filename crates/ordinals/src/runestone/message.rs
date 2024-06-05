@@ -19,16 +19,19 @@ impl Message {
         let mut id = RuneId::default();
         for chunk in payload[i + 1..].chunks(4) {
           if chunk.len() != 4 {
+            eprintln!("trailing integers");
             flaw.get_or_insert(Flaw::TrailingIntegers);
             break;
           }
 
           let Some(next) = id.next(chunk[0], chunk[1]) else {
+            eprintln!("edict runeid");
             flaw.get_or_insert(Flaw::EdictRuneId);
             break;
           };
 
           let Some(edict) = Edict::from_integers(tx, next, chunk[2], chunk[3]) else {
+            eprintln!("edict output");
             flaw.get_or_insert(Flaw::EdictOutput);
             break;
           };
@@ -40,6 +43,7 @@ impl Message {
       }
 
       let Some(&value) = payload.get(i + 1) else {
+        eprintln!("truncated field");
         flaw.get_or_insert(Flaw::TruncatedField);
         break;
       };

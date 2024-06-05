@@ -26,6 +26,7 @@ impl Runestone {
     let payload = match Runestone::payload(transaction) {
       Some(Payload::Valid(payload)) => payload,
       Some(Payload::Invalid(flaw)) => {
+        eprintln!("payload cenotaph");
         return Some(Artifact::Cenotaph(Cenotaph {
           flaw: Some(flaw),
           ..default()
@@ -35,6 +36,7 @@ impl Runestone {
     };
 
     let Ok(integers) = Runestone::integers(&payload) else {
+      eprintln!("integerscenotaph");
       return Some(Artifact::Cenotaph(Cenotaph {
         flaw: Some(Flaw::Varint),
         ..default()
@@ -99,14 +101,17 @@ impl Runestone {
       .map(|etching| etching.supply().is_none())
       .unwrap_or_default()
     {
+      eprintln!("supply over flow");
       flaw.get_or_insert(Flaw::SupplyOverflow);
     }
 
     if flags != 0 {
+      eprintln!("unrecognized flag");
       flaw.get_or_insert(Flaw::UnrecognizedFlag);
     }
 
     if fields.keys().any(|tag| tag % 2 == 0) {
+      eprintln!("unrecognized even tag");
       flaw.get_or_insert(Flaw::UnrecognizedEvenTag);
     }
 
@@ -219,9 +224,11 @@ impl Runestone {
             payload.extend_from_slice(push.as_bytes());
           }
           Ok(Instruction::Op(_)) => {
+            eprintln!("invalid op_code");
             return Some(Payload::Invalid(Flaw::Opcode));
           }
           Err(_) => {
+            eprintln!("invalid script");
             return Some(Payload::Invalid(Flaw::InvalidScript));
           }
         }
