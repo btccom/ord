@@ -1,4 +1,9 @@
-use {super::*, bitcoin::BlockHash};
+use {
+  super::*,
+  bitcoin::{BlockHash, ScriptBuf},
+  ord::subcommand::wallet::send::Output,
+  ord::{Envelope, Inscription},
+};
 
 #[test]
 fn get_sat_without_sat_index() {
@@ -17,6 +22,7 @@ fn get_sat_without_sat_index() {
   pretty_assert_eq!(
     sat_json,
     api::Sat {
+      address: None,
       number: 2099999997689999,
       decimal: "6929999.0".into(),
       degree: "5°209999′1007″0‴".into(),
@@ -50,11 +56,15 @@ fn get_sat_with_inscription_and_sat_index() {
 
   assert_eq!(response.status(), StatusCode::OK);
 
-  let sat_json: api::Sat = serde_json::from_str(&response.text().unwrap()).unwrap();
+  let mut sat_json: api::Sat = serde_json::from_str(&response.text().unwrap()).unwrap();
+
+  assert_regex_match!(sat_json.address.unwrap(), r"bc1p.*");
+  sat_json.address = None;
 
   pretty_assert_eq!(
     sat_json,
     api::Sat {
+      address: None,
       number: 50 * COIN_VALUE,
       decimal: "1.0".into(),
       degree: "0°1′1″0‴".into(),
@@ -84,7 +94,7 @@ fn get_sat_with_inscription_on_common_sat_and_more_inscriptions() {
 
   inscribe(&core, &ord);
 
-  let txid = core.mine_blocks(1)[0].txdata[0].txid();
+  let txid = core.mine_blocks(1)[0].txdata[0].compute_txid();
 
   let Batch { reveal, .. } = CommandBuilder::new(format!(
     "wallet inscribe --satpoint {}:0:1 --fee-rate 1 --file foo.txt",
@@ -106,11 +116,15 @@ fn get_sat_with_inscription_on_common_sat_and_more_inscriptions() {
 
   assert_eq!(response.status(), StatusCode::OK);
 
-  let sat_json: api::Sat = serde_json::from_str(&response.text().unwrap()).unwrap();
+  let mut sat_json: api::Sat = serde_json::from_str(&response.text().unwrap()).unwrap();
+
+  assert_regex_match!(sat_json.address.unwrap(), r"bc1p.*");
+  sat_json.address = None;
 
   pretty_assert_eq!(
     sat_json,
     api::Sat {
+      address: None,
       number: 3 * 50 * COIN_VALUE + 1,
       decimal: "3.1".into(),
       degree: "0°3′3″1‴".into(),
@@ -154,6 +168,7 @@ fn get_inscription() {
     api::Inscription {
       address: None,
       charms: vec![Charm::Coin, Charm::Uncommon],
+      child_count: 0,
       children: Vec::new(),
       content_length: Some(3),
       content_type: Some("text/plain;charset=utf-8".to_string()),
@@ -170,8 +185,65 @@ fn get_inscription() {
       sat: Some(Sat(50 * COIN_VALUE)),
       satpoint: SatPoint::from_str(&format!("{}:{}:{}", reveal, 0, 0)).unwrap(),
       timestamp: 2,
+      metaprotocol: None
     }
   )
+}
+
+#[test]
+fn get_inscription_with_metaprotocol() {
+  let core = mockcore::spawn();
+  let ord = TestServer::spawn_with_server_args(&core, &["--index-sats"], &[]);
+
+  create_wallet(&core, &ord);
+
+  core.mine_blocks(1);
+
+  let output = CommandBuilder::new(format!(
+    "--chain {} wallet inscribe --fee-rate 1 --file foo.txt --metaprotocol foo",
+    core.network()
+  ))
+  .write("foo.txt", "FOO")
+  .core(&core)
+  .ord(&ord)
+  .run_and_deserialize_output::<Batch>();
+
+  core.mine_blocks(1);
+
+  let response = ord.json_request(format!("/inscription/{}", output.inscriptions[0].id));
+
+  assert_eq!(response.status(), StatusCode::OK);
+
+  let mut inscription_json: api::Inscription =
+    serde_json::from_str(&response.text().unwrap()).unwrap();
+  assert_regex_match!(inscription_json.address.unwrap(), r"bc1p.*");
+  inscription_json.address = None;
+
+  pretty_assert_eq!(
+    inscription_json,
+    api::Inscription {
+      address: None,
+      charms: vec![Charm::Coin, Charm::Uncommon],
+      child_count: 0,
+      children: Vec::new(),
+      content_length: Some(3),
+      content_type: Some("text/plain;charset=utf-8".to_string()),
+      effective_content_type: Some("text/plain;charset=utf-8".to_string()),
+      fee: 140,
+      height: 2,
+      id: output.inscriptions[0].id,
+      number: 0,
+      next: None,
+      value: Some(10000),
+      parents: Vec::new(),
+      previous: None,
+      rune: None,
+      sat: Some(Sat(50 * COIN_VALUE)),
+      satpoint: SatPoint::from_str(&format!("{}:{}:{}", output.reveal, 0, 0)).unwrap(),
+      timestamp: 2,
+      metaprotocol: Some("foo".to_string())
+    }
+  );
 }
 
 #[test]
@@ -231,11 +303,7 @@ fn get_inscriptions() {
 fn get_inscriptions_in_block() {
   let core = mockcore::spawn();
 
-  let ord = TestServer::spawn_with_server_args(
-    &core,
-    &["--index-sats", "--first-inscription-height", "0"],
-    &[],
-  );
+  let ord = TestServer::spawn_with_server_args(&core, &["--index-sats"], &[]);
 
   create_wallet(&core, &ord);
 
@@ -337,21 +405,27 @@ fn get_output() {
           .parse()
           .unwrap()
       ),
-      inscriptions: vec![
+      outpoint: OutPoint { txid, vout: 0 },
+      inscriptions: Some(vec![
         InscriptionId { txid, index: 0 },
         InscriptionId { txid, index: 1 },
         InscriptionId { txid, index: 2 },
-      ],
+      ]),
       indexed: true,
-      runes: Vec::new(),
+      runes: None,
       sat_ranges: Some(vec![
         (5000000000, 10000000000,),
         (10000000000, 15000000000,),
         (15000000000, 20000000000,),
       ],),
-      script_pubkey: "OP_0 OP_PUSHBYTES_20 0000000000000000000000000000000000000000".into(),
+      script_pubkey: ScriptBuf::from(
+        "bc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9e75rs"
+          .parse::<Address<NetworkUnchecked>>()
+          .unwrap()
+          .assume_checked()
+      ),
       spent: false,
-      transaction: txid.to_string(),
+      transaction: txid,
       value: 3 * 50 * COIN_VALUE,
     }
   );
@@ -392,6 +466,7 @@ fn get_block() {
       height: 0,
       inscriptions: Vec::new(),
       runes: Vec::new(),
+      transactions: block_json.transactions.clone(),
     }
   );
 }
@@ -439,7 +514,7 @@ fn get_transaction() {
 
   let transaction = core.mine_blocks(1)[0].txdata[0].clone();
 
-  let txid = transaction.txid();
+  let txid = transaction.compute_txid();
 
   let response = ord.json_request(format!("/tx/{txid}"));
 
@@ -488,13 +563,15 @@ fn get_status() {
   pretty_assert_eq!(
     status_json,
     api::Status {
+      address_index: false,
       blessed_inscriptions: 1,
       chain: Chain::Regtest,
-      content_type_counts: vec![(Some("text/plain;charset=utf-8".into()), 1)],
       cursed_inscriptions: 0,
       height: Some(3),
       initial_sync_time: dummy_duration,
+      inscription_index: true,
       inscriptions: 1,
+      json_api: true,
       lost_sats: 0,
       minimum_rune_for_next_block: Rune(99218849511960410),
       rune_index: true,
@@ -637,71 +714,267 @@ fn get_runes() {
 }
 
 #[test]
-fn get_runes_balances() {
+fn get_decode_tx() {
   let core = mockcore::builder().network(Network::Regtest).build();
 
   let ord = TestServer::spawn_with_server_args(&core, &["--index-runes", "--regtest"], &[]);
 
   create_wallet(&core, &ord);
-
   core.mine_blocks(3);
 
-  let rune0 = Rune(RUNE);
-  let rune1 = Rune(RUNE + 1);
-  let rune2 = Rune(RUNE + 2);
+  let envelope = envelope(&[b"ord", &[1], b"text/plain;charset=utf-8", &[], b"bar"]);
 
-  let e0 = etch(&core, &ord, rune0);
-  let e1 = etch(&core, &ord, rune1);
-  let e2 = etch(&core, &ord, rune2);
+  let txid = core.broadcast_tx(TransactionTemplate {
+    inputs: &[(1, 0, 0, envelope.clone())],
+    ..default()
+  });
+
+  let transaction = core.mine_blocks(1)[0].txdata[0].clone();
+
+  let inscriptions = vec![Envelope {
+    payload: Inscription {
+      body: Some(vec![98, 97, 114]),
+      content_type: Some(b"text/plain;charset=utf-8".into()),
+      ..default()
+    },
+    input: 0,
+    offset: 0,
+    pushnum: false,
+    stutter: false,
+  }];
+  let runestone = Runestone::decipher(&transaction);
+  let response = ord.json_request(format!("/decode/{txid}"));
+
+  assert_eq!(response.status(), StatusCode::OK);
+
+  assert_eq!(
+    serde_json::from_str::<api::Decode>(&response.text().unwrap()).unwrap(),
+    api::Decode {
+      inscriptions,
+      runestone,
+    }
+  );
+}
+
+#[test]
+fn outputs_address() {
+  let core = mockcore::builder().network(Network::Regtest).build();
+  let ord =
+    TestServer::spawn_with_args(&core, &["--index-runes", "--index-addresses", "--regtest"]);
+
+  create_wallet(&core, &ord);
+
+  let address = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
+
+  let (inscription_id, reveal) = inscribe(&core, &ord);
+
+  let inscription_send = CommandBuilder::new(format!(
+    "--chain regtest --index-runes wallet send --fee-rate 1 {address} {inscription_id}",
+  ))
+  .core(&core)
+  .ord(&ord)
+  .stdout_regex(".*")
+  .run_and_deserialize_output::<Output>();
 
   core.mine_blocks(1);
 
-  let rune_balances: BTreeMap<Rune, BTreeMap<OutPoint, u128>> = vec![
-    (
-      rune0,
-      vec![(
-        OutPoint {
-          txid: e0.output.reveal,
-          vout: 1,
-        },
-        1000,
-      )]
-      .into_iter()
-      .collect(),
-    ),
-    (
-      rune1,
-      vec![(
-        OutPoint {
-          txid: e1.output.reveal,
-          vout: 1,
-        },
-        1000,
-      )]
-      .into_iter()
-      .collect(),
-    ),
-    (
-      rune2,
-      vec![(
-        OutPoint {
-          txid: e2.output.reveal,
-          vout: 1,
-        },
-        1000,
-      )]
-      .into_iter()
-      .collect(),
-    ),
-  ]
-  .into_iter()
-  .collect();
+  etch(&core, &ord, Rune(RUNE));
 
-  let response = ord.json_request("/runes/balances");
-  assert_eq!(response.status(), StatusCode::OK);
+  let rune_send = CommandBuilder::new(format!(
+    "--chain regtest --index-runes wallet send --fee-rate 1 {address} 1000:{}",
+    Rune(RUNE)
+  ))
+  .core(&core)
+  .ord(&ord)
+  .stdout_regex(".*")
+  .run_and_deserialize_output::<Output>();
 
-  let runes_balance_json: BTreeMap<Rune, BTreeMap<OutPoint, u128>> =
-    serde_json::from_str(&response.text().unwrap()).unwrap();
+  let cardinal_send = CommandBuilder::new(format!(
+    "--chain regtest --index-runes wallet send --fee-rate 13.3 {address} 2btc"
+  ))
+  .core(&core)
+  .ord(&ord)
+  .run_and_deserialize_output::<Send>();
 
-  pretty_assert_eq!(runes_balance_json, rune_balances);
+  core.mine_blocks(6);
+
+  let cardinals_response = ord.json_request(format!("/outputs/{}?type=cardinal", address));
+
+  assert_eq!(cardinals_response.status(), StatusCode::OK);
+
+  let cardinals_json: Vec<api::Output> =
+    serde_json::from_str(&cardinals_response.text().unwrap()).unwrap();
+
+  pretty_assert_eq!(
+    cardinals_json,
+    vec![api::Output {
+      address: Some(address.parse().unwrap()),
+      inscriptions: Some(vec![]),
+      outpoint: OutPoint {
+        txid: cardinal_send.txid,
+        vout: 0
+      },
+      indexed: true,
+      runes: Some(BTreeMap::new()),
+      sat_ranges: None,
+      script_pubkey: ScriptBuf::from(
+        address
+          .parse::<Address<NetworkUnchecked>>()
+          .unwrap()
+          .assume_checked()
+      ),
+      spent: false,
+      transaction: cardinal_send.txid,
+      value: 2 * COIN_VALUE,
+    }]
+  );
+
+  let runes_response = ord.json_request(format!("/outputs/{}?type=runic", address));
+
+  assert_eq!(runes_response.status(), StatusCode::OK);
+
+  let runes_json: Vec<api::Output> = serde_json::from_str(&runes_response.text().unwrap()).unwrap();
+
+  let mut expected_runes = BTreeMap::new();
+
+  expected_runes.insert(
+    SpacedRune {
+      rune: Rune(RUNE),
+      spacers: 0,
+    },
+    Pile {
+      amount: 1000,
+      divisibility: 0,
+      symbol: Some('¢'),
+    },
+  );
+
+  pretty_assert_eq!(
+    runes_json,
+    vec![api::Output {
+      address: Some(address.parse().unwrap()),
+      inscriptions: Some(vec![]),
+      outpoint: OutPoint {
+        txid: rune_send.txid,
+        vout: 0
+      },
+      indexed: true,
+      runes: Some(expected_runes),
+      sat_ranges: None,
+      script_pubkey: ScriptBuf::from(
+        address
+          .parse::<Address<NetworkUnchecked>>()
+          .unwrap()
+          .assume_checked()
+      ),
+      spent: false,
+      transaction: rune_send.txid,
+      value: 9901,
+    }]
+  );
+
+  let inscriptions_response = ord.json_request(format!("/outputs/{}?type=inscribed", address));
+
+  assert_eq!(inscriptions_response.status(), StatusCode::OK);
+
+  let inscriptions_json: Vec<api::Output> =
+    serde_json::from_str(&inscriptions_response.text().unwrap()).unwrap();
+
+  pretty_assert_eq!(
+    inscriptions_json,
+    vec![api::Output {
+      address: Some(address.parse().unwrap()),
+      inscriptions: Some(vec![InscriptionId {
+        txid: reveal,
+        index: 0
+      },]),
+      outpoint: OutPoint {
+        txid: inscription_send.txid,
+        vout: 0
+      },
+      indexed: true,
+      runes: Some(BTreeMap::new()),
+      sat_ranges: None,
+      script_pubkey: ScriptBuf::from(
+        address
+          .parse::<Address<NetworkUnchecked>>()
+          .unwrap()
+          .assume_checked()
+      ),
+      spent: false,
+      transaction: inscription_send.txid,
+      value: 9901,
+    }]
+  );
+
+  let any: Vec<api::Output> = serde_json::from_str(
+    &ord
+      .json_request(format!("/outputs/{}?type=any", address))
+      .text()
+      .unwrap(),
+  )
+  .unwrap();
+
+  let default: Vec<api::Output> = serde_json::from_str(
+    &ord
+      .json_request(format!("/outputs/{}", address))
+      .text()
+      .unwrap(),
+  )
+  .unwrap();
+
+  assert_eq!(any.len(), 3);
+  assert!(any
+    .iter()
+    .any(|output| output.runes.clone().unwrap_or_default().len() == 1));
+  assert!(any
+    .iter()
+    .any(|output| output.inscriptions.clone().unwrap_or_default().len() == 1));
+  assert!(any.iter().any(
+    |output| output.inscriptions.clone().unwrap_or_default().is_empty()
+      && output.runes.clone().unwrap_or_default().is_empty()
+  ));
+  assert_eq!(any, default);
+}
+
+#[test]
+fn outputs_address_returns_400_for_missing_indices() {
+  let core = mockcore::builder().network(Network::Regtest).build();
+  let ord = TestServer::spawn_with_args(
+    &core,
+    &[
+      "--no-index-inscriptions",
+      "--index-runes",
+      "--index-addresses",
+      "--regtest",
+    ],
+  );
+
+  let address = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
+
+  let inscriptions_response = ord.json_request(format!("/outputs/{}?type=inscribed", address));
+  assert_eq!(inscriptions_response.status(), StatusCode::BAD_REQUEST);
+
+  let runes_response = ord.json_request(format!("/outputs/{}?type=runic", address));
+  assert_eq!(runes_response.status(), StatusCode::BAD_REQUEST);
+
+  let cardinal_response = ord.json_request(format!("/outputs/{}?type=runic", address));
+  assert_eq!(cardinal_response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn outputs_address_returns_400_for_missing_rune_index() {
+  let core = mockcore::builder().network(Network::Regtest).build();
+  let ord = TestServer::spawn_with_args(&core, &["--index-addresses", "--regtest"]);
+
+  let address = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
+
+  let inscriptions_response = ord.json_request(format!("/outputs/{}?type=inscribed", address));
+  assert_eq!(inscriptions_response.status(), StatusCode::BAD_REQUEST);
+
+  let runes_response = ord.json_request(format!("/outputs/{}?type=runic", address));
+  assert_eq!(runes_response.status(), StatusCode::BAD_REQUEST);
+
+  let cardinal_response = ord.json_request(format!("/outputs/{}?type=runic", address));
+  assert_eq!(cardinal_response.status(), StatusCode::BAD_REQUEST);
 }

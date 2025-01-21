@@ -20,6 +20,7 @@
       }
 
       img {
+        float: left;
         height: 100%;
         opacity: 0;
         width: 100%;
@@ -28,6 +29,6 @@
     <script src=/static/preview-image.js type=module defer></script>
   </head>
   <body>
-    <img src=/content/{{self.inscription_id}}></img>
+    <img src=/content/{{self.inscription_id}} alt='inscription {{self.inscription_id}}'>
   </body>
 </html>

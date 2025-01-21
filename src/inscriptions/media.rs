@@ -5,11 +5,10 @@ use {
     self, BROTLI_MODE_FONT as FONT, BROTLI_MODE_GENERIC as GENERIC, BROTLI_MODE_TEXT as TEXT,
   },
   mp4::{MediaType, Mp4Reader, TrackType},
-  std::{fs::File, io::BufReader},
 };
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-pub(crate) enum Media {
+pub enum Media {
   Audio,
   Code(Language),
   Font,
@@ -24,7 +23,7 @@ pub(crate) enum Media {
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-pub(crate) enum Language {
+pub enum Language {
   Css,
   JavaScript,
   Json,
@@ -49,7 +48,7 @@ impl Display for Language {
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-pub(crate) enum ImageRendering {
+pub enum ImageRendering {
   Auto,
   Pixelated,
 }
@@ -99,7 +98,7 @@ impl Media {
     ("text/css",                    TEXT,    Code(Css),        &["css"]),
     ("text/html",                   TEXT,    Iframe,           &[]),
     ("text/html;charset=utf-8",     TEXT,    Iframe,           &["html"]),
-    ("text/javascript",             TEXT,    Code(JavaScript), &["js"]),
+    ("text/javascript",             TEXT,    Code(JavaScript), &["js", "mjs"]),
     ("text/markdown",               TEXT,    Markdown,         &[]),
     ("text/markdown;charset=utf-8", TEXT,    Markdown,         &["md"]),
     ("text/plain",                  TEXT,    Text,             &[]),
